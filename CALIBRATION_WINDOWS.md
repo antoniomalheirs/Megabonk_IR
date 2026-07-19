@@ -120,3 +120,30 @@ Or choose a model manually:
 ```powershell
 python Inference\play.py --config Configs\default.yaml --model Models\megabonk_ppo.zip
 ```
+
+## Reward tuning for correct Megabonk behavior
+
+The default rewards are designed for Megabonk's survivor-like loop: survive, keep moving, collect XP, level up, choose perks/skills, kill enemies, and interact with map objects.
+
+Important values in `Configs/default.yaml`:
+
+```yaml
+rewards:
+  survival_reward: 0.01
+  xp_reward: 5.0
+  hp_loss_penalty: 1.0
+  death_penalty: -10.0
+  score_reward_multiplier: 0.1
+  exploration_reward: 0.002
+  visual_novelty_threshold: 6.0
+  stagnation_penalty: 0.01
+  stagnation_steps: 90
+```
+
+Use these tuning rules:
+
+- If the character stands still, increase `exploration_reward` slightly or lower `visual_novelty_threshold`.
+- If the character runs around but ignores survival, lower `exploration_reward` or increase `hp_loss_penalty`.
+- If the character misses button totems, lower `environment.auto_interact_every_steps` so it taps interact more often.
+- If perk choices stay open, increase `environment.auto_confirm_repeats` or reduce `environment.auto_confirm_cooldown_steps`.
+- If score OCR is noisy, reduce `score_reward_multiplier` and rely more on XP/survival/exploration rewards.

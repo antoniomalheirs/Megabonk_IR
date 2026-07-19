@@ -53,6 +53,14 @@ rewards:
   death_penalty: -10.0
   # Reward multiplier for score increase
   score_reward_multiplier: 0.1
+  # Small shaping reward for visual novelty/exploration. Megabonk is a 3D
+  # survivor-like where moving through the map finds XP, shrines, items and
+  # totems; this discourages standing still without overpowering core rewards.
+  exploration_reward: 0.002
+  visual_novelty_threshold: 6.0
+  # Anti-stuck penalty when frames stay visually similar for too long.
+  stagnation_penalty: 0.01
+  stagnation_steps: 90
 
   # HUD regions for OCR [left, top, right, bottom] in screen pixels
   # These MUST be calibrated for your resolution!

@@ -197,3 +197,20 @@ python Inference\play.py --config Configs\default.yaml --model Models\megabonk_p
 ### CUDA errors
 
 Change `ppo.device` to `cpu` in `Configs/default.yaml`.
+
+## Reward design notes
+
+Megabonk plays like a 3D survivor/roguelite: the character moves through generated maps, attacks automatically, kills waves/bosses, collects XP, levels up into random upgrade/perk choices, and finds items, shrines, totems, chests, and other map interactables. The reward setup follows that loop:
+
+- `survival_reward` gives a tiny reward each step for staying alive.
+- `hp_loss_penalty` and `death_penalty` punish taking damage and dying.
+- `xp_reward` rewards level-up events detected by XP-bar resets or the calibrated level-up/perk template.
+- `score_reward_multiplier` rewards score increases, which approximates killing enemies and progressing combat.
+- `exploration_reward` rewards visual novelty so the agent does not learn to stand still; moving around is important for XP gems, items, shrines, totems, and map objectives.
+- `stagnation_penalty` punishes long periods with little visual change, helping avoid getting stuck against terrain or idling in one spot.
+- `auto_interact_enabled` periodically taps the interact key for button totems and proximity/button prompts while the policy is still learning.
+- `auto_confirm_level_up` keeps the run moving through perk/skill selection screens.
+
+The shaping rewards are intentionally small. The main objectives remain survival, avoiding damage, gaining levels, killing enemies/raising score, and continuing the run.
+
+If the agent explores too randomly, lower `exploration_reward`. If it stands still or misses too many map objects, raise `exploration_reward`, lower `visual_novelty_threshold`, or lower `auto_interact_every_steps`.

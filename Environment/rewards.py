@@ -29,6 +29,10 @@ class RewardConfig:
     hp_loss_penalty: float = 1.0
     death_penalty: float = -10.0
     score_reward_multiplier: float = 0.1
+    exploration_reward: float = 0.002
+    visual_novelty_threshold: float = 6.0
+    stagnation_penalty: float = 0.01
+    stagnation_steps: int = 90
 
     # HUD regions [left, top, right, bottom]
     hp_region: tuple[int, int, int, int] = (50, 50, 300, 80)
@@ -294,6 +298,8 @@ class RewardCalculator:
         self._prev_xp: Optional[float] = None
         self._prev_score: Optional[float] = None
         self._prev_level_up_visible: bool = False
+        self._prev_novelty_frame: Optional[np.ndarray] = None
+        self._stagnation_count: int = 0
         self._steps: int = 0
 
     def reset(self) -> None:
@@ -302,6 +308,8 @@ class RewardCalculator:
         self._prev_xp = None
         self._prev_score = None
         self._prev_level_up_visible = False
+        self._prev_novelty_frame = None
+        self._stagnation_count = 0
         self._steps = 0
 
     def calculate(self, frame: np.ndarray) -> tuple[float, dict]:
@@ -378,6 +386,21 @@ class RewardCalculator:
         self._prev_xp = current_xp
         self._prev_level_up_visible = level_up_screen
 
+        # --- Visual exploration / anti-stuck shaping ---
+        novelty = self._calculate_visual_novelty(frame)
+        info["visual_novelty"] = novelty
+        if novelty >= self.config.visual_novelty_threshold:
+            reward += self.config.exploration_reward
+            breakdown["exploration"] = self.config.exploration_reward
+            self._stagnation_count = 0
+        else:
+            self._stagnation_count += 1
+            if self._stagnation_count >= self.config.stagnation_steps:
+                reward -= self.config.stagnation_penalty
+                breakdown["stagnation"] = -self.config.stagnation_penalty
+                self._stagnation_count = 0
+        info["stagnation_count"] = self._stagnation_count
+
         # --- Score reading (OCR) ---
         score_crop = self._crop_region(frame, self.config.score_region)
         current_score = self._ocr.read_number(score_crop)
@@ -394,6 +417,20 @@ class RewardCalculator:
         info["reward_breakdown"] = breakdown
 
         return reward, info
+
+    def _calculate_visual_novelty(self, frame: np.ndarray) -> float:
+        """Estimate frame-to-frame scene change to reward exploration/movement."""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        small = cv2.resize(gray, (32, 18), interpolation=cv2.INTER_AREA)
+        small = small.astype(np.float32)
+
+        if self._prev_novelty_frame is None:
+            self._prev_novelty_frame = small
+            return 0.0
+
+        novelty = float(np.mean(np.abs(small - self._prev_novelty_frame)))
+        self._prev_novelty_frame = small
+        return novelty
 
     @staticmethod
     def _crop_region(

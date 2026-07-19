@@ -4,12 +4,13 @@ MegaBonk AI — Action Controller
 Maps discrete action indices from the RL agent to keyboard keys
 and mouse movements using PyDirectInput.
 
-Action Space: MultiDiscrete([3, 3, 2, 9, 7])
+Action Space: MultiDiscrete([3, 3, 2, 9, 7, 2])
   [0] Horizontal:  0=nothing, 1=A(left), 2=D(right)
   [1] Vertical:    0=nothing, 1=W(forward), 2=S(backward)
   [2] Jump:        0=nothing, 1=Space
   [3] Mouse ΔX:    0..8 → mapped to deltas [-4, -3, -2, -1, 0, +1, +2, +3, +4]
   [4] Mouse ΔY:    0..6 → mapped to deltas [-3, -2, -1, 0, +1, +2, +3]
+  [5] Interact:    0=nothing, 1=press interact/confirm key
 """
 
 from __future__ import annotations
@@ -45,6 +46,8 @@ class ActionConfig:
     jump_options: int = 2
     mouse_dx_options: int = 9
     mouse_dy_options: int = 7
+    interact_options: int = 2
+    interact_key: str = "e"
 
 
 # Maps action indices to key names
@@ -62,7 +65,7 @@ class ActionController:
 
     Usage:
         controller = ActionController(config)
-        controller.execute(action_array)  # np.array([1, 2, 0, 5, 3])
+        controller.execute(action_array)  # np.array([1, 2, 0, 5, 3, 1])
         controller.release_all()  # cleanup
     """
 
@@ -93,8 +96,8 @@ class ActionController:
         Execute a MultiDiscrete action.
 
         Args:
-            action: numpy array of shape (5,) with values:
-                [horizontal, vertical, jump, mouse_dx, mouse_dy]
+            action: numpy array of shape (6,) with values:
+                [horizontal, vertical, jump, mouse_dx, mouse_dy, interact]
 
         Returns:
             Dict with action details for logging/debugging.
@@ -104,6 +107,7 @@ class ActionController:
         jump = int(action[2])
         mouse_dx_idx = int(action[3])
         mouse_dy_idx = int(action[4])
+        interact = int(action[5]) if len(action) > 5 else 0
 
         # --- Keyboard ---
         target_keys: set[str] = set()
@@ -119,6 +123,9 @@ class ActionController:
         j_key = _JUMP_KEYS.get(jump)
         if j_key:
             target_keys.add(j_key)
+
+        if interact > 0:
+            target_keys.add(self.config.interact_key)
 
         # Release keys that should no longer be held
         keys_to_release = self._pressed_keys - target_keys
@@ -148,6 +155,7 @@ class ActionController:
             "mouse_dy": raw_dy,
             "pixel_dx": pixel_dx,
             "pixel_dy": pixel_dy,
+            "interact": bool(interact),
         }
 
     def _move_mouse(self, pixel_dx: int, pixel_dy: int) -> None:
@@ -217,6 +225,7 @@ class ActionController:
             self.config.jump_options,
             self.config.mouse_dx_options,
             self.config.mouse_dy_options,
+            self.config.interact_options,
         ]
 
     def __del__(self) -> None:

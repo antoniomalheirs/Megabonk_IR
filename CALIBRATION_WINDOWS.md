@@ -69,6 +69,34 @@ python run_reward_calibration.py --no-window-region --update-config --templates 
 
 After calibration, inspect `Configs/calibration_preview.png`. If a rectangle is wrong, rerun the command; the previous YAML is backed up before each write.
 
+## Fast HUD-only setup
+
+For the easiest HUD configuration, run:
+
+```powershell
+configure_hud_windows.bat
+```
+
+This is equivalent to:
+
+```powershell
+python run_reward_calibration.py --window-title "MegaBonk" --quick-hud --preview Configs\hud_preview.png
+```
+
+It only asks for HP, XP and score boxes, updates `Configs/default.yaml`, skips the slow OCR model startup, and saves `Configs/hud_preview.png`.
+
+To review the boxes currently saved in the YAML without changing anything:
+
+```powershell
+python run_reward_calibration.py --window-title "MegaBonk" --review-current --preview Configs\hud_review.png
+```
+
+To fix only one region:
+
+```powershell
+python run_reward_calibration.py --window-title "MegaBonk" --quick-hud --regions score
+```
+
 ## After calibration: train the model
 
 With MegaBonk still open, start training from the repository folder:

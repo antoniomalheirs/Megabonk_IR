@@ -82,6 +82,33 @@ During calibration:
 
 Open the preview after calibration. If the rectangles are wrong, run calibration again.
 
+### Easier HUD-only setup
+
+If you only want to configure the HUD used by rewards, use the dedicated quick command:
+
+```powershell
+configure_hud_windows.bat
+```
+
+Or run it manually:
+
+```powershell
+python run_reward_calibration.py --window-title "MegaBonk" --quick-hud --preview Configs\hud_preview.png
+```
+
+Useful HUD shortcuts:
+
+```powershell
+# Review the HUD boxes currently saved in Configs/default.yaml
+python run_reward_calibration.py --window-title "MegaBonk" --review-current --preview Configs\hud_review.png
+
+# Recalibrate only one or two boxes instead of all HUD regions
+python run_reward_calibration.py --window-title "MegaBonk" --quick-hud --regions hp xp
+python run_reward_calibration.py --window-title "MegaBonk" --quick-hud --regions score
+```
+
+`--quick-hud` writes the selected HUD regions to `Configs/default.yaml`, skips the slow EasyOCR score test, avoids template selection, and saves an annotated preview so you can immediately see whether HP/XP/score are correct.
+
 ### Selection controls
 
 - Drag with the mouse to draw a rectangle.

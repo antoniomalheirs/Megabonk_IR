@@ -33,6 +33,12 @@ from Environment.rewards import BarReader, OCRReader
 
 Region = list[int]
 
+HUD_TARGETS = {
+    "hp_region": "HP Bar",
+    "xp_region": "XP Bar",
+    "score_region": "Score Counter",
+}
+
 
 def load_yaml(path: Path) -> dict[str, Any]:
     """Load a YAML file, returning an empty dict for blank files."""
@@ -164,6 +170,22 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=project_root / "Configs" / "default.yaml")
     parser.add_argument("--image", type=Path, help="Use an existing screenshot instead of live capture")
     parser.add_argument("--update-config", action="store_true", help="Write selected values into the YAML config")
+    parser.add_argument(
+        "--quick-hud",
+        action="store_true",
+        help="Shortcut for HUD-only setup: update config, skip OCR model load, no templates",
+    )
+    parser.add_argument(
+        "--review-current",
+        action="store_true",
+        help="Draw current configured HUD regions on a fresh frame and exit",
+    )
+    parser.add_argument(
+        "--regions",
+        nargs="+",
+        choices=["hp", "xp", "score"],
+        help="Calibrate only selected HUD regions instead of all three",
+    )
     parser.add_argument("--window-title", help="Window title text to locate the MegaBonk window")
     parser.add_argument(
         "--use-window-region",
@@ -192,6 +214,11 @@ def main() -> None:
     parser.add_argument("--templates", action="store_true", help="Also select and save game-over/level-up templates")
     args = parser.parse_args()
 
+    if args.quick_hud:
+        args.update_config = True
+        args.skip_ocr_test = True
+        args.templates = False
+
     if args.list_windows:
         for window in list_windows():
             print(f"{window.hwnd}: {window.title} {list(window.rect)}")
@@ -201,12 +228,31 @@ def main() -> None:
     frame, capture_region = load_frame(args, config)
     print(f"Captured frame shape: {frame.shape}")
 
+    if args.review_current:
+        rewards = config.get("rewards", {})
+        current_regions = {
+            key: list(rewards[key])
+            for key in HUD_TARGETS
+            if key in rewards and rewards[key]
+        }
+        if not current_regions:
+            print("No HUD regions found in config to review.")
+            return
+        args.preview.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(args.preview), draw_preview(frame, current_regions))
+        print(f"Saved current HUD preview: {args.preview}")
+        return
+
     selected: dict[str, Region] = {}
-    for key, label in [
-        ("hp_region", "HP Bar"),
-        ("xp_region", "XP Bar"),
-        ("score_region", "Score Counter"),
-    ]:
+    wanted = set(args.regions or ["hp", "xp", "score"])
+    region_key_to_short = {
+        "hp_region": "hp",
+        "xp_region": "xp",
+        "score_region": "score",
+    }
+    for key, label in HUD_TARGETS.items():
+        if region_key_to_short[key] not in wanted:
+            continue
         region = select_region(frame, label)
         if region is None:
             continue

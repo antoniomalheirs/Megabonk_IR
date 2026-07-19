@@ -293,6 +293,7 @@ class RewardCalculator:
         self._prev_hp: Optional[float] = None
         self._prev_xp: Optional[float] = None
         self._prev_score: Optional[float] = None
+        self._prev_level_up_visible: bool = False
         self._steps: int = 0
 
     def reset(self) -> None:
@@ -300,6 +301,7 @@ class RewardCalculator:
         self._prev_hp = None
         self._prev_xp = None
         self._prev_score = None
+        self._prev_level_up_visible = False
         self._steps = 0
 
     def calculate(self, frame: np.ndarray) -> tuple[float, dict]:
@@ -325,11 +327,13 @@ class RewardCalculator:
             reward += self.config.death_penalty
             info["dead"] = True
             info["level_up"] = False
+            info["level_up_screen"] = False
             info["reward_breakdown"] = {"death": self.config.death_penalty}
             return reward, info
 
         info["dead"] = False
         info["level_up"] = False
+        info["level_up_screen"] = False
 
         # --- Survival reward ---
         reward += self.config.survival_reward
@@ -352,21 +356,27 @@ class RewardCalculator:
         xp_crop = self._crop_region(frame, self.config.xp_region)
         current_xp = self._bar_reader.read_xp_bar(xp_crop)
 
-        # Detect level up: XP bar resets (drops significantly)
-        level_up_detected = self._template_detector.detect(
+        # Detect level up: XP bar resets or a perk-choice template appears.
+        level_up_screen = self._template_detector.detect(
             frame, "level_up", self.config.template_match_threshold
         )
-        if self._prev_xp is not None:
-            if current_xp < self._prev_xp - 0.3:
-                # XP bar reset → level up!
-                level_up_detected = True
-            if level_up_detected:
-                reward += self.config.xp_reward
-                breakdown["level_up"] = self.config.xp_reward
-                info["level_up"] = True
+        level_up_event = False
+        if self._prev_xp is not None and current_xp < self._prev_xp - 0.3:
+            # XP bar reset → level up!
+            level_up_event = True
+        if level_up_screen and not self._prev_level_up_visible:
+            # Template just appeared → perk/skill choice screen opened.
+            level_up_event = True
 
+        if level_up_event:
+            reward += self.config.xp_reward
+            breakdown["level_up"] = self.config.xp_reward
+            info["level_up"] = True
+
+        info["level_up_screen"] = level_up_screen
         info["xp"] = current_xp
         self._prev_xp = current_xp
+        self._prev_level_up_visible = level_up_screen
 
         # --- Score reading (OCR) ---
         score_crop = self._crop_region(frame, self.config.score_region)

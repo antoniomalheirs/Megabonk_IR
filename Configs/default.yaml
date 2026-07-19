@@ -84,6 +84,13 @@ environment:
   auto_confirm_level_up: true
   auto_confirm_key: "enter"
   auto_confirm_cooldown_steps: 30
+  auto_confirm_repeats: 2
+  # Periodically press interact so button totems and nearby pickups can be used
+  # even before the policy has fully learned the interact action.
+  auto_interact_enabled: true
+  auto_interact_key: "e"
+  auto_interact_every_steps: 45
+  auto_interact_hold_duration: 0.05
 
 # --- PPO Hyperparameters ---
 ppo:

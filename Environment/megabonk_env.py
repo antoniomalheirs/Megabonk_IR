@@ -123,7 +123,16 @@ class MegaBonkEnv(gym.Env):
         self._auto_confirm_level_up = env_cfg.get("auto_confirm_level_up", True)
         self._auto_confirm_key = env_cfg.get("auto_confirm_key", "enter")
         self._auto_confirm_cooldown_steps = env_cfg.get("auto_confirm_cooldown_steps", 30)
+        self._auto_confirm_repeats = env_cfg.get("auto_confirm_repeats", 2)
+        self._pending_auto_confirms = 0
         self._last_auto_confirm_step = -self._auto_confirm_cooldown_steps
+        self._auto_interact_enabled = env_cfg.get("auto_interact_enabled", True)
+        self._auto_interact_key = env_cfg.get(
+            "auto_interact_key", self._action_config.interact_key
+        )
+        self._auto_interact_every_steps = env_cfg.get("auto_interact_every_steps", 45)
+        self._auto_interact_hold_duration = env_cfg.get("auto_interact_hold_duration", 0.05)
+        self._last_auto_interact_step = 0
 
         # --- Spaces ---
         obs_shape = self._preprocessor.observation_shape  # (4, 84, 84)
@@ -181,6 +190,9 @@ class MegaBonkEnv(gym.Env):
         self._episode_reward = 0.0
         self._preprocessor.reset()
         self._reward_calc.reset()
+        self._pending_auto_confirms = 0
+        self._last_auto_confirm_step = -self._auto_confirm_cooldown_steps
+        self._last_auto_interact_step = 0
 
         # Wait for game to be ready (post-death screen, loading, etc.)
         time.sleep(self._reset_delay)
@@ -233,6 +245,7 @@ class MegaBonkEnv(gym.Env):
         self._episode_reward += reward
 
         auto_choice_info = self._maybe_auto_confirm_choice(reward_info)
+        auto_interact_info = self._maybe_auto_interact(action_info)
 
         # Preprocess for the agent
         observation = self._preprocessor.process(frame)
@@ -249,6 +262,7 @@ class MegaBonkEnv(gym.Env):
             "episode_reward": self._episode_reward,
             "action": action_info,
             "auto_choice": auto_choice_info,
+            "auto_interact": auto_interact_info,
             **reward_info,
         }
 
@@ -266,17 +280,55 @@ class MegaBonkEnv(gym.Env):
 
     def _maybe_auto_confirm_choice(self, reward_info: dict) -> dict:
         """Confirm perk/skill choice screens when a level-up is detected."""
-        info = {"triggered": False, "key": None}
-        if not self._auto_confirm_level_up or not reward_info.get("level_up", False):
+        info = {"triggered": False, "key": None, "pending": self._pending_auto_confirms}
+        if not self._auto_confirm_level_up:
+            return info
+
+        choice_detected = reward_info.get("level_up", False) or reward_info.get(
+            "level_up_screen", False
+        )
+        if choice_detected and self._pending_auto_confirms <= 0:
+            self._pending_auto_confirms = max(1, self._auto_confirm_repeats)
+
+        if self._pending_auto_confirms <= 0:
+            info["pending"] = 0
             return info
 
         steps_since_last = self._current_step - self._last_auto_confirm_step
         if steps_since_last < self._auto_confirm_cooldown_steps:
+            info["pending"] = self._pending_auto_confirms
             return info
 
         self._controller.press_key(self._auto_confirm_key, duration=0.05)
+        self._pending_auto_confirms -= 1
         self._last_auto_confirm_step = self._current_step
-        info.update({"triggered": True, "key": self._auto_confirm_key})
+        info.update(
+            {
+                "triggered": True,
+                "key": self._auto_confirm_key,
+                "pending": self._pending_auto_confirms,
+            }
+        )
+        return info
+
+    def _maybe_auto_interact(self, action_info: dict) -> dict:
+        """Periodically press interact for button totems and nearby pickups."""
+        info = {"triggered": False, "key": None}
+        if not self._auto_interact_enabled or action_info.get("interact", False):
+            return info
+        if self._auto_interact_every_steps <= 0:
+            return info
+
+        steps_since_last = self._current_step - self._last_auto_interact_step
+        if steps_since_last < self._auto_interact_every_steps:
+            return info
+
+        self._controller.press_key(
+            self._auto_interact_key,
+            duration=self._auto_interact_hold_duration,
+        )
+        self._last_auto_interact_step = self._current_step
+        info.update({"triggered": True, "key": self._auto_interact_key})
         return info
 
     def render(self) -> Optional[np.ndarray]:

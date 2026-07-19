@@ -87,20 +87,27 @@ python Trainer\train.py --config Configs\default.yaml --resume Checkpoints\megab
 
 ## Skill, perk, and map item handling
 
-The agent action space includes an explicit interact action. By default, `actions.interact_key` is `e`, so the policy can learn to press `E` for pickups, map items, or interaction prompts.
+The agent action space includes an explicit interact action. By default, `actions.interact_key` is `e`, so the policy can learn to press `E` for pickups, map items, button totems, proximity prompts, or interaction prompts.
 
-The environment also has an auto-confirm safety net for level-up/perk screens:
+The environment also has safety nets for level-up/perk screens and interactable map objects:
 
 ```yaml
 environment:
   auto_confirm_level_up: true
   auto_confirm_key: "enter"
   auto_confirm_cooldown_steps: 30
+  auto_confirm_repeats: 2
+  auto_interact_enabled: true
+  auto_interact_key: "e"
+  auto_interact_every_steps: 45
+  auto_interact_hold_duration: 0.05
 ```
 
-When the reward detector sees a level-up/perk-choice template or XP reset, the environment presses the confirm key once, respecting the cooldown. This prevents training from freezing on a perk screen. If your game confirms perks with a different key, change `auto_confirm_key` in `Configs/default.yaml`.
+When the reward detector sees a level-up/perk-choice template or XP reset, the environment schedules confirm key presses, respecting the cooldown. This prevents training from freezing on a perk screen. If your game confirms perks with a different key, change `auto_confirm_key` in `Configs/default.yaml`.
 
-If you want the neural network to learn all perk menu navigation manually instead of auto-confirming the highlighted choice, set `auto_confirm_level_up: false` and add the needed menu keys to the action controller before training a new model.
+For totems and pickups, the environment periodically taps `auto_interact_key`. This makes the character try button totems and nearby/proximity interactables even before the policy has learned perfect timing. The policy still receives the explicit interact action and can learn to use it directly.
+
+If you want the neural network to learn all perk menu navigation and totem timing manually, set `auto_confirm_level_up: false` and `auto_interact_enabled: false`, then train a fresh model.
 
 ## Run the trained model
 

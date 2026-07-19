@@ -22,7 +22,7 @@ The six action components are:
 5. mouse Y delta;
 6. interact/confirm: nothing / configured interact key, default `E`.
 
-That last interact action lets the policy learn to pick up map items and interact with prompts. In addition, the environment can automatically press `Enter` when a level-up/perk choice is detected so training does not stall on choice screens.
+That last interact action lets the policy learn to pick up map items, button totems, proximity prompts, and other interactions. In addition, the environment can automatically press `Enter` when a level-up/perk choice is detected so training does not stall on choice screens, and it can periodically press the interact key as a safety net while the policy is still learning.
 
 ## 1. Install the project on Windows
 
@@ -100,16 +100,23 @@ actions:
 
 Use the key your MegaBonk build expects for picking up map items or interacting with prompts. If your game uses another key, change `interact_key`.
 
-The default environment also auto-confirms level-up/perk screens:
+The default environment also auto-confirms level-up/perk screens and periodically taps interact for button/proximity totems:
 
 ```yaml
 environment:
   auto_confirm_level_up: true
   auto_confirm_key: "enter"
   auto_confirm_cooldown_steps: 30
+  auto_confirm_repeats: 2
+  auto_interact_enabled: true
+  auto_interact_key: "e"
+  auto_interact_every_steps: 45
+  auto_interact_hold_duration: 0.05
 ```
 
-Use `auto_confirm_key` for the key that accepts the highlighted/default perk choice. This guarantees training continues through perk/skill choice screens instead of waiting forever. If you want the policy to learn all menu navigation manually, set `auto_confirm_level_up: false` and expose the needed keys through the action controller.
+Use `auto_confirm_key` for the key that accepts the highlighted/default perk choice. `auto_confirm_repeats` presses it more than once, with `auto_confirm_cooldown_steps` between presses, because some level-up screens need a small delay before accepting input. This keeps training moving through perk/skill choice screens instead of waiting forever.
+
+Use `auto_interact_key` for the key that activates button totems, pickup prompts, or interactable map objects. `auto_interact_every_steps` periodically taps that key while the agent is moving around, so proximity interactions and button totems are attempted even early in training. The neural network still has its own explicit interact action and can learn to press it at better times. If you want the policy to learn all menu and interaction timing manually, set `auto_confirm_level_up: false` and `auto_interact_enabled: false`.
 
 ## 5. Optional environment check
 
@@ -173,8 +180,10 @@ python Inference\play.py --config Configs\default.yaml --model Models\megabonk_p
 ### The AI does not pick up items
 
 - Confirm the game pickup/interact key.
-- Set `actions.interact_key` to that key.
+- Set `actions.interact_key` and `environment.auto_interact_key` to that key.
 - Keep `interact_options: 2` so the action space includes the interact action.
+- Keep `environment.auto_interact_enabled: true` for button totems/proximity prompts during early training.
+- Lower `environment.auto_interact_every_steps` if it is not trying often enough.
 - Train a fresh model after changing the action space.
 
 ### Training stops on perk/skill selection
@@ -182,6 +191,8 @@ python Inference\play.py --config Configs\default.yaml --model Models\megabonk_p
 - Calibrate `level_up_template` with `--templates`.
 - Keep `environment.auto_confirm_level_up: true`.
 - Set `environment.auto_confirm_key` to the key that accepts the highlighted perk.
+- Increase `environment.auto_confirm_repeats` if the game sometimes ignores the first key press.
+- Lower `environment.auto_confirm_cooldown_steps` if the choice screen remains open too long.
 
 ### CUDA errors
 

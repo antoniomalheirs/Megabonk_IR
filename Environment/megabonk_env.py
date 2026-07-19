@@ -5,7 +5,7 @@ Custom Gymnasium environment that wraps MegaBonk via screen capture,
 OCR-based rewards, and keyboard/mouse input simulation.
 
 Observation: Stacked grayscale frames (4, 84, 84)
-Actions:     MultiDiscrete([3, 3, 2, 9, 7]) — WASD, Jump, Mouse ΔX/ΔY
+Actions:     MultiDiscrete([3, 3, 2, 9, 7, 2]) — WASD, Jump, Mouse ΔX/ΔY, Interact
 """
 
 from __future__ import annotations
@@ -93,6 +93,8 @@ class MegaBonkEnv(gym.Env):
             jump_options=act_cfg.get("jump_options", 2),
             mouse_dx_options=act_cfg.get("mouse_dx_options", 9),
             mouse_dy_options=act_cfg.get("mouse_dy_options", 7),
+            interact_options=act_cfg.get("interact_options", 2),
+            interact_key=act_cfg.get("interact_key", "e"),
         )
         self._controller = ActionController(self._action_config)
 
@@ -103,6 +105,10 @@ class MegaBonkEnv(gym.Env):
             hp_loss_penalty=rew_cfg.get("hp_loss_penalty", 1.0),
             death_penalty=rew_cfg.get("death_penalty", -10.0),
             score_reward_multiplier=rew_cfg.get("score_reward_multiplier", 0.1),
+            exploration_reward=rew_cfg.get("exploration_reward", 0.002),
+            visual_novelty_threshold=rew_cfg.get("visual_novelty_threshold", 6.0),
+            stagnation_penalty=rew_cfg.get("stagnation_penalty", 0.01),
+            stagnation_steps=rew_cfg.get("stagnation_steps", 90),
             hp_region=tuple(rew_cfg.get("hp_region", [50, 50, 300, 80])),
             xp_region=tuple(rew_cfg.get("xp_region", [50, 85, 300, 105])),
             score_region=tuple(rew_cfg.get("score_region", [850, 20, 1070, 55])),
@@ -118,6 +124,19 @@ class MegaBonkEnv(gym.Env):
         self._max_steps = env_cfg.get("max_steps", 0)
         self._step_delay = env_cfg.get("step_delay", 0.033)
         self._reset_delay = env_cfg.get("reset_delay", 3.0)
+        self._auto_confirm_level_up = env_cfg.get("auto_confirm_level_up", True)
+        self._auto_confirm_key = env_cfg.get("auto_confirm_key", "enter")
+        self._auto_confirm_cooldown_steps = env_cfg.get("auto_confirm_cooldown_steps", 30)
+        self._auto_confirm_repeats = env_cfg.get("auto_confirm_repeats", 2)
+        self._pending_auto_confirms = 0
+        self._last_auto_confirm_step = -self._auto_confirm_cooldown_steps
+        self._auto_interact_enabled = env_cfg.get("auto_interact_enabled", True)
+        self._auto_interact_key = env_cfg.get(
+            "auto_interact_key", self._action_config.interact_key
+        )
+        self._auto_interact_every_steps = env_cfg.get("auto_interact_every_steps", 45)
+        self._auto_interact_hold_duration = env_cfg.get("auto_interact_hold_duration", 0.05)
+        self._last_auto_interact_step = 0
 
         # --- Spaces ---
         obs_shape = self._preprocessor.observation_shape  # (4, 84, 84)
@@ -175,6 +194,9 @@ class MegaBonkEnv(gym.Env):
         self._episode_reward = 0.0
         self._preprocessor.reset()
         self._reward_calc.reset()
+        self._pending_auto_confirms = 0
+        self._last_auto_confirm_step = -self._auto_confirm_cooldown_steps
+        self._last_auto_interact_step = 0
 
         # Wait for game to be ready (post-death screen, loading, etc.)
         time.sleep(self._reset_delay)
@@ -201,7 +223,7 @@ class MegaBonkEnv(gym.Env):
         Execute one step in the environment.
 
         Args:
-            action: MultiDiscrete action array of shape (5,).
+            action: MultiDiscrete action array of shape (6,).
 
         Returns:
             Tuple of (observation, reward, terminated, truncated, info).
@@ -226,6 +248,9 @@ class MegaBonkEnv(gym.Env):
         reward, reward_info = self._reward_calc.calculate(frame)
         self._episode_reward += reward
 
+        auto_choice_info = self._maybe_auto_confirm_choice(reward_info)
+        auto_interact_info = self._maybe_auto_interact(action_info)
+
         # Preprocess for the agent
         observation = self._preprocessor.process(frame)
 
@@ -240,6 +265,8 @@ class MegaBonkEnv(gym.Env):
             "episode_step": self._current_step,
             "episode_reward": self._episode_reward,
             "action": action_info,
+            "auto_choice": auto_choice_info,
+            "auto_interact": auto_interact_info,
             **reward_info,
         }
 
@@ -254,6 +281,59 @@ class MegaBonkEnv(gym.Env):
             )
 
         return observation, reward, terminated, truncated, info
+
+    def _maybe_auto_confirm_choice(self, reward_info: dict) -> dict:
+        """Confirm perk/skill choice screens when a level-up is detected."""
+        info = {"triggered": False, "key": None, "pending": self._pending_auto_confirms}
+        if not self._auto_confirm_level_up:
+            return info
+
+        choice_detected = reward_info.get("level_up", False) or reward_info.get(
+            "level_up_screen", False
+        )
+        if choice_detected and self._pending_auto_confirms <= 0:
+            self._pending_auto_confirms = max(1, self._auto_confirm_repeats)
+
+        if self._pending_auto_confirms <= 0:
+            info["pending"] = 0
+            return info
+
+        steps_since_last = self._current_step - self._last_auto_confirm_step
+        if steps_since_last < self._auto_confirm_cooldown_steps:
+            info["pending"] = self._pending_auto_confirms
+            return info
+
+        self._controller.press_key(self._auto_confirm_key, duration=0.05)
+        self._pending_auto_confirms -= 1
+        self._last_auto_confirm_step = self._current_step
+        info.update(
+            {
+                "triggered": True,
+                "key": self._auto_confirm_key,
+                "pending": self._pending_auto_confirms,
+            }
+        )
+        return info
+
+    def _maybe_auto_interact(self, action_info: dict) -> dict:
+        """Periodically press interact for button totems and nearby pickups."""
+        info = {"triggered": False, "key": None}
+        if not self._auto_interact_enabled or action_info.get("interact", False):
+            return info
+        if self._auto_interact_every_steps <= 0:
+            return info
+
+        steps_since_last = self._current_step - self._last_auto_interact_step
+        if steps_since_last < self._auto_interact_every_steps:
+            return info
+
+        self._controller.press_key(
+            self._auto_interact_key,
+            duration=self._auto_interact_hold_duration,
+        )
+        self._last_auto_interact_step = self._current_step
+        info.update({"triggered": True, "key": self._auto_interact_key})
+        return info
 
     def render(self) -> Optional[np.ndarray]:
         """Render the current frame (for human visualization)."""

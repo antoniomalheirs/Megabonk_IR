@@ -36,6 +36,10 @@ actions:
   jump_options: 2          # [nothing, Space]
   mouse_dx_options: 9      # [-4..+4]
   mouse_dy_options: 7      # [-3..+3]
+  # Interaction / pickup / confirm action. The RL agent can choose this
+  # to pick up map items or confirm prompts when the game expects E.
+  interact_options: 2      # [nothing, interact]
+  interact_key: "e"
 
 # --- Rewards ---
 rewards:
@@ -49,6 +53,14 @@ rewards:
   death_penalty: -10.0
   # Reward multiplier for score increase
   score_reward_multiplier: 0.1
+  # Small shaping reward for visual novelty/exploration. Megabonk is a 3D
+  # survivor-like where moving through the map finds XP, shrines, items and
+  # totems; this discourages standing still without overpowering core rewards.
+  exploration_reward: 0.002
+  visual_novelty_threshold: 6.0
+  # Anti-stuck penalty when frames stay visually similar for too long.
+  stagnation_penalty: 0.01
+  stagnation_steps: 90
 
   # HUD regions for OCR [left, top, right, bottom] in screen pixels
   # These MUST be calibrated for your resolution!
@@ -74,6 +86,19 @@ environment:
   reset_delay: 3.0
   # Whether to pause the game on reset (if supported)
   pause_on_reset: false
+  # Automatically press a confirm key when a level-up/perk choice is detected.
+  # This keeps training from stalling on selection screens while the agent
+  # still has an explicit interact action for map items/pickups.
+  auto_confirm_level_up: true
+  auto_confirm_key: "enter"
+  auto_confirm_cooldown_steps: 30
+  auto_confirm_repeats: 2
+  # Periodically press interact so button totems and nearby pickups can be used
+  # even before the policy has fully learned the interact action.
+  auto_interact_enabled: true
+  auto_interact_key: "e"
+  auto_interact_every_steps: 45
+  auto_interact_hold_duration: 0.05
 
 # --- PPO Hyperparameters ---
 ppo:

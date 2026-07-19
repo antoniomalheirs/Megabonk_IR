@@ -31,6 +31,10 @@ from Environment.rewards import BarReader, OCRReader
 
 Region = list[int]
 
+def load_yaml(path: Path) -> dict[str, Any]:
+    """Load a YAML file, returning an empty dict for blank files."""
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
 
 def load_yaml(path: Path) -> dict[str, Any]:
     """Load a YAML file, returning an empty dict for blank files."""

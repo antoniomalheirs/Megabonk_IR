@@ -1,0 +1,127 @@
+# MegaBonk AI — Default Configuration
+# =====================================
+
+# --- Screen Capture ---
+capture:
+  # Target FPS for DXCam capture
+  target_fps: 60
+  # Game window title (used to find the window)
+  window_title: "MegaBonk"
+  # Capture region: null = full screen, or [left, top, right, bottom]
+  region: null
+  # Output color format for DXCam
+  output_color: "BGR"
+
+# --- Preprocessing ---
+preprocessing:
+  # Resize resolution for the agent's observation
+  resize_width: 84
+  resize_height: 84
+  # Convert to grayscale
+  grayscale: true
+  # Number of frames to stack
+  frame_stack: 4
+
+# --- Action Space ---
+actions:
+  # Mouse sensitivity multiplier (pixels per delta unit per step)
+  mouse_speed: 15
+  # Mouse smoothing: interpolate mouse movements over N sub-steps
+  mouse_smoothing_steps: 1
+  # Duration (seconds) to hold keys between steps
+  key_hold_duration: 0.05
+  # Action mapping
+  horizontal_options: 3    # [nothing, A, D]
+  vertical_options: 3      # [nothing, W, S]
+  jump_options: 2          # [nothing, Space]
+  mouse_dx_options: 9      # [-4..+4]
+  mouse_dy_options: 7      # [-3..+3]
+
+# --- Rewards ---
+rewards:
+  # Per-step survival reward
+  survival_reward: 0.01
+  # Reward for gaining XP / leveling up
+  xp_reward: 5.0
+  # Penalty multiplier for HP loss (reward = -hp_loss_penalty * pct_lost)
+  hp_loss_penalty: 1.0
+  # Penalty for dying (game over)
+  death_penalty: -10.0
+  # Reward multiplier for score increase
+  score_reward_multiplier: 0.1
+
+  # HUD regions for OCR [left, top, right, bottom] in screen pixels
+  # These MUST be calibrated for your resolution!
+  # Run `python run_reward_calibration.py` to set these.
+  hp_region: [50, 50, 300, 80]
+  xp_region: [50, 85, 300, 105]
+  score_region: [850, 20, 1070, 55]
+
+  # Template images for game state detection (relative to project root)
+  game_over_template: "Configs/templates/game_over.png"
+  level_up_template: "Configs/templates/level_up.png"
+
+  # Template matching threshold (0.0 - 1.0)
+  template_match_threshold: 0.8
+
+# --- Environment ---
+environment:
+  # Max steps per episode (0 = unlimited, episode ends on death)
+  max_steps: 0
+  # Delay (seconds) between steps to control game speed
+  step_delay: 0.033  # ~30 actions per second
+  # Delay after reset (seconds) to wait for game to load
+  reset_delay: 3.0
+  # Whether to pause the game on reset (if supported)
+  pause_on_reset: false
+
+# --- PPO Hyperparameters ---
+ppo:
+  # Policy type
+  policy: "CnnPolicy"
+  # Learning rate
+  learning_rate: 0.0003
+  # Number of steps per rollout
+  n_steps: 2048
+  # Mini-batch size
+  batch_size: 64
+  # Number of training epochs per rollout
+  n_epochs: 10
+  # Discount factor
+  gamma: 0.99
+  # GAE lambda
+  gae_lambda: 0.95
+  # Clip range
+  clip_range: 0.2
+  # Entropy coefficient (higher = more exploration)
+  ent_coef: 0.01
+  # Value function coefficient
+  vf_coef: 0.5
+  # Max gradient norm
+  max_grad_norm: 0.5
+  # Verbose level (0=silent, 1=info, 2=debug)
+  verbose: 1
+  # Device
+  device: "cuda"
+
+# --- Training ---
+training:
+  # Total timesteps to train
+  total_timesteps: 500_000
+  # Checkpoint frequency (save every N steps)
+  checkpoint_freq: 10_000
+  # Checkpoint directory
+  checkpoint_dir: "Checkpoints"
+  # Log directory (TensorBoard)
+  log_dir: "Logs"
+  # Model save path
+  model_save_path: "Models/megabonk_ppo"
+
+# --- Inference ---
+inference:
+  # Path to trained model
+  model_path: "Models/megabonk_ppo.zip"
+  # Show overlay with action info
+  show_overlay: true
+  # Overlay position [x, y]
+  overlay_position: [10, 10]

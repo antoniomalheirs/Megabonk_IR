@@ -1,0 +1,287 @@
+"""
+MegaBonk AI — Gymnasium Environment
+======================================
+Custom Gymnasium environment that wraps MegaBonk via screen capture,
+OCR-based rewards, and keyboard/mouse input simulation.
+
+Observation: Stacked grayscale frames (4, 84, 84)
+Actions:     MultiDiscrete([3, 3, 2, 9, 7]) — WASD, Jump, Mouse ΔX/ΔY
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from pathlib import Path
+from typing import Any, Optional
+
+import gymnasium as gym
+import numpy as np
+from gymnasium import spaces
+
+from Capture.screen_capture import ScreenCapture
+from Capture.preprocessing import FramePreprocessor
+from Environment.actions import ActionController, ActionConfig
+from Environment.rewards import RewardCalculator, RewardConfig
+
+logger = logging.getLogger(__name__)
+
+
+class MegaBonkEnv(gym.Env):
+    """
+    Gymnasium environment for MegaBonk.
+
+    Connects screen capture, frame preprocessing, action execution,
+    and reward calculation into a standard RL interface.
+
+    The environment captures the game screen, preprocesses it into
+    stacked grayscale frames, and sends keyboard/mouse inputs based
+    on the agent's actions. Rewards are computed from OCR readings
+    of HUD elements (HP, XP, Score) and template-based detection
+    of game events (death, level up).
+    """
+
+    metadata = {"render_modes": ["human"], "render_fps": 30}
+
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        render_mode: Optional[str] = None,
+    ) -> None:
+        """
+        Initialize the MegaBonk environment.
+
+        Args:
+            config: Full configuration dict (from YAML).
+                    If None, uses defaults.
+            render_mode: "human" to display frames, None for headless.
+        """
+        super().__init__()
+        self.render_mode = render_mode
+        config = config or {}
+
+        # --- Parse config sections ---
+        cap_cfg = config.get("capture", {})
+        pre_cfg = config.get("preprocessing", {})
+        act_cfg = config.get("actions", {})
+        rew_cfg = config.get("rewards", {})
+        env_cfg = config.get("environment", {})
+
+        # --- Screen Capture ---
+        region = cap_cfg.get("region")
+        self._capture = ScreenCapture(
+            target_fps=cap_cfg.get("target_fps", 60),
+            region=tuple(region) if region else None,
+            output_color=cap_cfg.get("output_color", "BGR"),
+        )
+
+        # --- Preprocessing ---
+        self._preprocessor = FramePreprocessor(
+            width=pre_cfg.get("resize_width", 84),
+            height=pre_cfg.get("resize_height", 84),
+            grayscale=pre_cfg.get("grayscale", True),
+            stack_size=pre_cfg.get("frame_stack", 4),
+        )
+
+        # --- Action Controller ---
+        self._action_config = ActionConfig(
+            mouse_speed=act_cfg.get("mouse_speed", 15),
+            mouse_smoothing_steps=act_cfg.get("mouse_smoothing_steps", 1),
+            key_hold_duration=act_cfg.get("key_hold_duration", 0.05),
+            horizontal_options=act_cfg.get("horizontal_options", 3),
+            vertical_options=act_cfg.get("vertical_options", 3),
+            jump_options=act_cfg.get("jump_options", 2),
+            mouse_dx_options=act_cfg.get("mouse_dx_options", 9),
+            mouse_dy_options=act_cfg.get("mouse_dy_options", 7),
+        )
+        self._controller = ActionController(self._action_config)
+
+        # --- Reward Calculator ---
+        reward_config = RewardConfig(
+            survival_reward=rew_cfg.get("survival_reward", 0.01),
+            xp_reward=rew_cfg.get("xp_reward", 5.0),
+            hp_loss_penalty=rew_cfg.get("hp_loss_penalty", 1.0),
+            death_penalty=rew_cfg.get("death_penalty", -10.0),
+            score_reward_multiplier=rew_cfg.get("score_reward_multiplier", 0.1),
+            hp_region=tuple(rew_cfg.get("hp_region", [50, 50, 300, 80])),
+            xp_region=tuple(rew_cfg.get("xp_region", [50, 85, 300, 105])),
+            score_region=tuple(rew_cfg.get("score_region", [850, 20, 1070, 55])),
+            game_over_template=rew_cfg.get("game_over_template"),
+            level_up_template=rew_cfg.get("level_up_template"),
+            template_match_threshold=rew_cfg.get("template_match_threshold", 0.8),
+        )
+        # Determine project root (parent of Environment/)
+        project_root = str(Path(__file__).resolve().parent.parent)
+        self._reward_calc = RewardCalculator(reward_config, project_root)
+
+        # --- Environment settings ---
+        self._max_steps = env_cfg.get("max_steps", 0)
+        self._step_delay = env_cfg.get("step_delay", 0.033)
+        self._reset_delay = env_cfg.get("reset_delay", 3.0)
+
+        # --- Spaces ---
+        obs_shape = self._preprocessor.observation_shape  # (4, 84, 84)
+        self.observation_space = spaces.Box(
+            low=0,
+            high=255,
+            shape=obs_shape,
+            dtype=np.uint8,
+        )
+
+        self.action_space = spaces.MultiDiscrete(
+            self._controller.action_space_dims
+        )
+
+        # --- Internal state ---
+        self._current_step = 0
+        self._episode_reward = 0.0
+        self._capture_started = False
+        self._last_raw_frame: Optional[np.ndarray] = None
+
+        logger.info(
+            "MegaBonkEnv initialized: obs=%s, actions=%s",
+            obs_shape,
+            self._controller.action_space_dims,
+        )
+
+    def reset(
+        self,
+        *,
+        seed: Optional[int] = None,
+        options: Optional[dict] = None,
+    ) -> tuple[np.ndarray, dict]:
+        """
+        Reset the environment for a new episode.
+
+        This releases all keys, waits for the game to be ready,
+        and returns the initial observation.
+
+        Returns:
+            Tuple of (observation, info).
+        """
+        super().reset(seed=seed, options=options)
+
+        # Release all keys from previous episode
+        self._controller.release_all()
+
+        # Start capture if not already running
+        if not self._capture_started:
+            self._capture.start()
+            self._capture_started = True
+            time.sleep(1.0)  # wait for first frames
+
+        # Reset internal state
+        self._current_step = 0
+        self._episode_reward = 0.0
+        self._preprocessor.reset()
+        self._reward_calc.reset()
+
+        # Wait for game to be ready (post-death screen, loading, etc.)
+        time.sleep(self._reset_delay)
+
+        # Capture initial observation
+        frame = self._capture.get_latest_frame()
+        if frame is None:
+            # Fallback: create a black frame
+            logger.warning("No frame available on reset, using black frame")
+            h = self._preprocessor.height
+            w = self._preprocessor.width
+            frame = np.zeros((h, w, 3), dtype=np.uint8)
+
+        self._last_raw_frame = frame
+        observation = self._preprocessor.process(frame)
+
+        info = {"episode_step": 0, "raw_frame_shape": frame.shape}
+        return observation, info
+
+    def step(
+        self, action: np.ndarray
+    ) -> tuple[np.ndarray, float, bool, bool, dict]:
+        """
+        Execute one step in the environment.
+
+        Args:
+            action: MultiDiscrete action array of shape (5,).
+
+        Returns:
+            Tuple of (observation, reward, terminated, truncated, info).
+        """
+        self._current_step += 1
+
+        # Execute the action (keyboard + mouse)
+        action_info = self._controller.execute(action)
+
+        # Wait for the action to take effect
+        if self._step_delay > 0:
+            time.sleep(self._step_delay)
+
+        # Capture the resulting frame
+        frame = self._capture.get_latest_frame()
+        if frame is None:
+            frame = self._last_raw_frame
+        else:
+            self._last_raw_frame = frame
+
+        # Calculate reward from the raw (full-res) frame
+        reward, reward_info = self._reward_calc.calculate(frame)
+        self._episode_reward += reward
+
+        # Preprocess for the agent
+        observation = self._preprocessor.process(frame)
+
+        # Check termination conditions
+        terminated = reward_info.get("dead", False)
+        truncated = (
+            self._max_steps > 0 and self._current_step >= self._max_steps
+        )
+
+        # Build info dict
+        info = {
+            "episode_step": self._current_step,
+            "episode_reward": self._episode_reward,
+            "action": action_info,
+            **reward_info,
+        }
+
+        if terminated or truncated:
+            # Release all keys on episode end
+            self._controller.release_all()
+            logger.info(
+                "Episode ended: steps=%d, reward=%.2f, dead=%s",
+                self._current_step,
+                self._episode_reward,
+                terminated,
+            )
+
+        return observation, reward, terminated, truncated, info
+
+    def render(self) -> Optional[np.ndarray]:
+        """Render the current frame (for human visualization)."""
+        if self.render_mode == "human" and self._last_raw_frame is not None:
+            import cv2
+
+            display = cv2.resize(self._last_raw_frame, (640, 360))
+            cv2.imshow("MegaBonk AI", display)
+            cv2.waitKey(1)
+            return display
+        return self._last_raw_frame
+
+    def close(self) -> None:
+        """Clean up resources."""
+        self._controller.release_all()
+        self._capture.stop()
+        self._capture_started = False
+
+        try:
+            import cv2
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
+
+        logger.info("MegaBonkEnv closed")
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass

@@ -1,0 +1,1 @@
+"""MegaBonk AI — Trainer package."""

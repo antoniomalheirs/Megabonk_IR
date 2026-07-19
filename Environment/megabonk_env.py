@@ -5,7 +5,7 @@ Custom Gymnasium environment that wraps MegaBonk via screen capture,
 OCR-based rewards, and keyboard/mouse input simulation.
 
 Observation: Stacked grayscale frames (4, 84, 84)
-Actions:     MultiDiscrete([3, 3, 2, 9, 7]) — WASD, Jump, Mouse ΔX/ΔY
+Actions:     MultiDiscrete([3, 3, 2, 9, 7, 2]) — WASD, Jump, Mouse ΔX/ΔY, Interact
 """
 
 from __future__ import annotations
@@ -93,6 +93,8 @@ class MegaBonkEnv(gym.Env):
             jump_options=act_cfg.get("jump_options", 2),
             mouse_dx_options=act_cfg.get("mouse_dx_options", 9),
             mouse_dy_options=act_cfg.get("mouse_dy_options", 7),
+            interact_options=act_cfg.get("interact_options", 2),
+            interact_key=act_cfg.get("interact_key", "e"),
         )
         self._controller = ActionController(self._action_config)
 
@@ -118,6 +120,10 @@ class MegaBonkEnv(gym.Env):
         self._max_steps = env_cfg.get("max_steps", 0)
         self._step_delay = env_cfg.get("step_delay", 0.033)
         self._reset_delay = env_cfg.get("reset_delay", 3.0)
+        self._auto_confirm_level_up = env_cfg.get("auto_confirm_level_up", True)
+        self._auto_confirm_key = env_cfg.get("auto_confirm_key", "enter")
+        self._auto_confirm_cooldown_steps = env_cfg.get("auto_confirm_cooldown_steps", 30)
+        self._last_auto_confirm_step = -self._auto_confirm_cooldown_steps
 
         # --- Spaces ---
         obs_shape = self._preprocessor.observation_shape  # (4, 84, 84)
@@ -201,7 +207,7 @@ class MegaBonkEnv(gym.Env):
         Execute one step in the environment.
 
         Args:
-            action: MultiDiscrete action array of shape (5,).
+            action: MultiDiscrete action array of shape (6,).
 
         Returns:
             Tuple of (observation, reward, terminated, truncated, info).
@@ -226,6 +232,8 @@ class MegaBonkEnv(gym.Env):
         reward, reward_info = self._reward_calc.calculate(frame)
         self._episode_reward += reward
 
+        auto_choice_info = self._maybe_auto_confirm_choice(reward_info)
+
         # Preprocess for the agent
         observation = self._preprocessor.process(frame)
 
@@ -240,6 +248,7 @@ class MegaBonkEnv(gym.Env):
             "episode_step": self._current_step,
             "episode_reward": self._episode_reward,
             "action": action_info,
+            "auto_choice": auto_choice_info,
             **reward_info,
         }
 
@@ -254,6 +263,21 @@ class MegaBonkEnv(gym.Env):
             )
 
         return observation, reward, terminated, truncated, info
+
+    def _maybe_auto_confirm_choice(self, reward_info: dict) -> dict:
+        """Confirm perk/skill choice screens when a level-up is detected."""
+        info = {"triggered": False, "key": None}
+        if not self._auto_confirm_level_up or not reward_info.get("level_up", False):
+            return info
+
+        steps_since_last = self._current_step - self._last_auto_confirm_step
+        if steps_since_last < self._auto_confirm_cooldown_steps:
+            return info
+
+        self._controller.press_key(self._auto_confirm_key, duration=0.05)
+        self._last_auto_confirm_step = self._current_step
+        info.update({"triggered": True, "key": self._auto_confirm_key})
+        return info
 
     def render(self) -> Optional[np.ndarray]:
         """Render the current frame (for human visualization)."""

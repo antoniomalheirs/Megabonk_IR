@@ -14,6 +14,7 @@ The tool can also reuse an existing screenshot for offline calibration:
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -27,14 +28,11 @@ project_root = Path(__file__).resolve().parent
 sys.path.append(str(project_root))
 
 from Capture.screen_capture import ScreenCapture
+from Capture.window_utils import find_window, focus_window, list_windows
 from Environment.rewards import BarReader, OCRReader
 
 Region = list[int]
 
-def load_yaml(path: Path) -> dict[str, Any]:
-    """Load a YAML file, returning an empty dict for blank files."""
-    with path.open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
 
 def load_yaml(path: Path) -> dict[str, Any]:
     """Load a YAML file, returning an empty dict for blank files."""
@@ -42,8 +40,12 @@ def load_yaml(path: Path) -> dict[str, Any]:
         return yaml.safe_load(handle) or {}
 
 
-def save_yaml(path: Path, data: dict[str, Any]) -> None:
+def save_yaml(path: Path, data: dict[str, Any], make_backup: bool = True) -> None:
     """Write YAML with stable key ordering and readable block style."""
+    if make_backup and path.exists():
+        backup = path.with_suffix(path.suffix + ".bak")
+        shutil.copy2(path, backup)
+        print(f"Backup saved: {backup}")
     with path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(data, handle, sort_keys=False, allow_unicode=True)
 
@@ -82,29 +84,48 @@ def select_region(image, label: str) -> Region | None:
     return validate_region([x, y, x + w, y + h], image.shape)
 
 
-def capture_frame(delay: float, output_color: str):
+def capture_frame(delay: float, output_color: str, region: Region | None):
     """Capture one frame from the primary display after a delay."""
     print("Starting calibration...")
     print("Make sure MegaBonk is visible on your main screen!")
+    if region:
+        print(f"Capturing screen region: {region}")
     if delay > 0:
         print(f"Grabbing frame in {delay:.1f} seconds...")
         time.sleep(delay)
 
-    cap = ScreenCapture(output_color=output_color)
+    cap = ScreenCapture(output_color=output_color, region=tuple(region) if region else None)
     frame = cap.grab_single()
     if frame is None:
         raise RuntimeError("Failed to capture screen. Try --image with a saved screenshot.")
     return frame
 
 
-def load_frame(args: argparse.Namespace):
-    """Load the calibration frame from disk or live capture."""
+def resolve_capture_region(args: argparse.Namespace, config: dict[str, Any]) -> Region | None:
+    """Resolve the live capture region from CLI, config or a Windows game window."""
+    if args.image:
+        return None
+    if args.region:
+        return validate_region(args.region, (99999, 99999, 3))
+    window_title = args.window_title or config.get("capture", {}).get("window_title")
+    if window_title and args.use_window_region:
+        window = find_window(window_title)
+        focus_window(window.hwnd)
+        print(f"Found game window: {window.title!r} at {list(window.rect)}")
+        return list(window.rect)
+    configured = config.get("capture", {}).get("region")
+    return list(configured) if configured else None
+
+
+def load_frame(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, Region | None]:
+    """Load the calibration frame from disk or live capture, returning the capture region used."""
     if args.image:
         frame = cv2.imread(str(args.image))
         if frame is None:
             raise RuntimeError(f"Failed to read image: {args.image}")
-        return frame
-    return capture_frame(args.delay, args.output_color)
+        return frame, None
+    region = resolve_capture_region(args, config)
+    return capture_frame(args.delay, args.output_color, region), region
 
 
 def draw_preview(image, regions: dict[str, Region]):
@@ -119,7 +140,15 @@ def draw_preview(image, regions: dict[str, Region]):
         left, top, right, bottom = region
         color = colors.get(name, (255, 255, 255))
         cv2.rectangle(preview, (left, top), (right, bottom), color, 2)
-        cv2.putText(preview, name, (left, max(15, top - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        cv2.putText(
+            preview,
+            name,
+            (left, max(15, top - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+        )
     return preview
 
 
@@ -135,17 +164,49 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=project_root / "Configs" / "default.yaml")
     parser.add_argument("--image", type=Path, help="Use an existing screenshot instead of live capture")
     parser.add_argument("--update-config", action="store_true", help="Write selected values into the YAML config")
+    parser.add_argument("--window-title", help="Window title text to locate the MegaBonk window")
+    parser.add_argument(
+        "--use-window-region",
+        action="store_true",
+        default=True,
+        help="Capture only the configured/window-title game window",
+    )
+    parser.add_argument(
+        "--no-window-region",
+        dest="use_window_region",
+        action="store_false",
+        help="Ignore window lookup and capture full screen/config region",
+    )
+    parser.add_argument(
+        "--region",
+        nargs=4,
+        type=int,
+        metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"),
+        help="Explicit screen capture region",
+    )
+    parser.add_argument("--list-windows", action="store_true", help="List visible Windows titles and exit")
+    parser.add_argument("--skip-ocr-test", action="store_true", help="Do not initialize EasyOCR while calibrating the score box")
     parser.add_argument("--delay", type=float, default=3.0, help="Seconds to wait before live capture")
     parser.add_argument("--output-color", default="BGR", choices=["BGR", "RGB"], help="DXCam output color")
     parser.add_argument("--preview", type=Path, default=project_root / "Configs" / "calibration_preview.png")
     parser.add_argument("--templates", action="store_true", help="Also select and save game-over/level-up templates")
     args = parser.parse_args()
 
-    frame = load_frame(args)
+    if args.list_windows:
+        for window in list_windows():
+            print(f"{window.hwnd}: {window.title} {list(window.rect)}")
+        return
+
+    config = load_yaml(args.config) if args.config.exists() else {}
+    frame, capture_region = load_frame(args, config)
     print(f"Captured frame shape: {frame.shape}")
 
     selected: dict[str, Region] = {}
-    for key, label in [("hp_region", "HP Bar"), ("xp_region", "XP Bar"), ("score_region", "Score Counter")]:
+    for key, label in [
+        ("hp_region", "HP Bar"),
+        ("xp_region", "XP Bar"),
+        ("score_region", "Score Counter"),
+    ]:
         region = select_region(frame, label)
         if region is None:
             continue
@@ -156,6 +217,8 @@ def main() -> None:
             print(f"Test HP Bar fill: {BarReader.read_hp_bar(crop):.2%}")
         elif key == "xp_region":
             print(f"Test XP Bar fill: {BarReader.read_xp_bar(crop):.2%}")
+        elif args.skip_ocr_test:
+            print("Test Score OCR: skipped (--skip-ocr-test)")
         else:
             print(f"Test Score OCR: {OCRReader().read_number(crop)}")
 
@@ -167,7 +230,11 @@ def main() -> None:
         ]:
             region = select_region(frame, label)
             if region is not None:
-                templates[key] = save_template(frame, region, project_root / "Configs" / "templates" / filename)
+                templates[key] = save_template(
+                    frame,
+                    region,
+                    project_root / "Configs" / "templates" / filename,
+                )
                 print(f"{key}: {templates[key]}")
 
     if selected:
@@ -182,7 +249,11 @@ def main() -> None:
         print(f"{key}: {value}")
 
     if args.update_config:
-        config = load_yaml(args.config)
+        capture_cfg = config.setdefault("capture", {})
+        if capture_region is not None:
+            capture_cfg["region"] = capture_region
+        if args.window_title:
+            capture_cfg["window_title"] = args.window_title
         rewards = config.setdefault("rewards", {})
         rewards.update(selected)
         rewards.update(templates)

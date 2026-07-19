@@ -68,3 +68,48 @@ python run_reward_calibration.py --no-window-region --update-config --templates 
 - Press `c` to skip the current region.
 
 After calibration, inspect `Configs/calibration_preview.png`. If a rectangle is wrong, rerun the command; the previous YAML is backed up before each write.
+
+## After calibration: train the model
+
+With MegaBonk still open, start training from the repository folder:
+
+```powershell
+python Trainer\train.py --config Configs\default.yaml
+```
+
+The training script reads `Configs/default.yaml`, creates `MegaBonkEnv`, trains PPO, writes checkpoints to `Checkpoints`, writes TensorBoard logs to `Logs`, and saves the final model under `Models`.
+
+To resume from a checkpoint:
+
+```powershell
+python Trainer\train.py --config Configs\default.yaml --resume Checkpoints\megabonk_ppo_10000_steps.zip
+```
+
+## Skill, perk, and map item handling
+
+The agent action space includes an explicit interact action. By default, `actions.interact_key` is `e`, so the policy can learn to press `E` for pickups, map items, or interaction prompts.
+
+The environment also has an auto-confirm safety net for level-up/perk screens:
+
+```yaml
+environment:
+  auto_confirm_level_up: true
+  auto_confirm_key: "enter"
+  auto_confirm_cooldown_steps: 30
+```
+
+When the reward detector sees a level-up/perk-choice template or XP reset, the environment presses the confirm key once, respecting the cooldown. This prevents training from freezing on a perk screen. If your game confirms perks with a different key, change `auto_confirm_key` in `Configs/default.yaml`.
+
+If you want the neural network to learn all perk menu navigation manually instead of auto-confirming the highlighted choice, set `auto_confirm_level_up: false` and add the needed menu keys to the action controller before training a new model.
+
+## Run the trained model
+
+```powershell
+python Inference\play.py --config Configs\default.yaml
+```
+
+Or choose a model manually:
+
+```powershell
+python Inference\play.py --config Configs\default.yaml --model Models\megabonk_ppo.zip
+```

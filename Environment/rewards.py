@@ -324,10 +324,12 @@ class RewardCalculator:
         if is_dead:
             reward += self.config.death_penalty
             info["dead"] = True
+            info["level_up"] = False
             info["reward_breakdown"] = {"death": self.config.death_penalty}
             return reward, info
 
         info["dead"] = False
+        info["level_up"] = False
 
         # --- Survival reward ---
         reward += self.config.survival_reward
@@ -351,17 +353,17 @@ class RewardCalculator:
         current_xp = self._bar_reader.read_xp_bar(xp_crop)
 
         # Detect level up: XP bar resets (drops significantly)
+        level_up_detected = self._template_detector.detect(
+            frame, "level_up", self.config.template_match_threshold
+        )
         if self._prev_xp is not None:
             if current_xp < self._prev_xp - 0.3:
                 # XP bar reset → level up!
+                level_up_detected = True
+            if level_up_detected:
                 reward += self.config.xp_reward
                 breakdown["level_up"] = self.config.xp_reward
-            # Also check template-based level up detection
-            elif self._template_detector.detect(
-                frame, "level_up", self.config.template_match_threshold
-            ):
-                reward += self.config.xp_reward
-                breakdown["level_up"] = self.config.xp_reward
+                info["level_up"] = True
 
         info["xp"] = current_xp
         self._prev_xp = current_xp

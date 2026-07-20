@@ -36,6 +36,8 @@ class FramePreprocessor:
         height: int = 84,
         grayscale: bool = True,
         stack_size: int = 4,
+        semantic_ui_channels: int = 0,
+        score_normalizer: float = 10000.0,
     ) -> None:
         """
         Args:
@@ -43,11 +45,15 @@ class FramePreprocessor:
             height: Target height for resized frames.
             grayscale: Whether to convert frames to grayscale.
             stack_size: Number of frames to stack (temporal context).
+            semantic_ui_channels: Number of extra UI feature planes appended to the observation.
+            score_normalizer: Score value represented as a full semantic-plane intensity.
         """
         self.width = width
         self.height = height
         self.grayscale = grayscale
         self.stack_size = stack_size
+        self.semantic_ui_channels = semantic_ui_channels
+        self.score_normalizer = score_normalizer
 
         # Frame stack — deque with fixed max length
         self._frame_stack: deque[np.ndarray] = deque(maxlen=stack_size)
@@ -56,15 +62,16 @@ class FramePreprocessor:
         """Clear the frame stack. Call this at the start of each episode."""
         self._frame_stack.clear()
 
-    def process(self, frame: np.ndarray) -> np.ndarray:
+    def process(self, frame: np.ndarray, ui_features: Optional[dict] = None) -> np.ndarray:
         """
         Process a raw frame and return the stacked observation.
 
         Args:
             frame: Raw BGR frame from DXCam, shape (H, W, 3).
+            ui_features: Optional normalized HUD/menu/prompt values to expose to the model.
 
         Returns:
-            Stacked observation, shape (stack_size, height, width), dtype uint8.
+            Stacked observation, shape (stack_size + semantic_ui_channels, height, width), dtype uint8.
             Channels-first format for SB3 CnnPolicy.
         """
         processed = self._preprocess_single(frame)
@@ -78,6 +85,9 @@ class FramePreprocessor:
 
         # Stack into (N, H, W) array — channels-first
         stacked = np.stack(list(self._frame_stack), axis=0)
+        if self.semantic_ui_channels > 0:
+            semantic = self._build_semantic_planes(ui_features or {})
+            stacked = np.concatenate([stacked, semantic], axis=0)
         return stacked
 
     def _preprocess_single(self, frame: np.ndarray) -> np.ndarray:
@@ -116,12 +126,50 @@ class FramePreprocessor:
         # Pad if needed
         while len(self._frame_stack) < self.stack_size:
             self._frame_stack.appendleft(self._frame_stack[0].copy())
-        return np.stack(list(self._frame_stack), axis=0)
+        stacked = np.stack(list(self._frame_stack), axis=0)
+        if self.semantic_ui_channels > 0:
+            semantic = self._build_semantic_planes({})
+            stacked = np.concatenate([stacked, semantic], axis=0)
+        return stacked
+
+    def _build_semantic_planes(self, ui_features: dict) -> np.ndarray:
+        """Convert recognized UI state into constant feature planes.
+
+        Channel 0: HUD bars/score summary (HP top third, XP middle third, score bottom third).
+        Channel 1: menu/choice state.
+        Channel 2: interaction/game-over state.
+        Extra configured channels are zero-filled for future templates.
+        """
+        planes = np.zeros((self.semantic_ui_channels, self.height, self.width), dtype=np.uint8)
+        if self.semantic_ui_channels <= 0:
+            return planes
+
+        hp = ui_features.get("hp")
+        xp = ui_features.get("xp")
+        score = ui_features.get("score")
+        if hp is not None:
+            planes[0, : self.height // 3, :] = int(np.clip(float(hp), 0.0, 1.0) * 255)
+        if xp is not None:
+            planes[0, self.height // 3 : 2 * self.height // 3, :] = int(np.clip(float(xp), 0.0, 1.0) * 255)
+        if score is not None:
+            planes[0, 2 * self.height // 3 :, :] = int(np.clip(float(score) / self.score_normalizer, 0.0, 1.0) * 255)
+
+        if self.semantic_ui_channels > 1:
+            menu_active = any(bool(ui_features.get(name, False)) for name in ("level_up_screen", "perk_choice", "main_menu", "pause_menu", "stage_select", "loading_screen"))
+            planes[1, :, :] = 255 if menu_active else 0
+
+        if self.semantic_ui_channels > 2:
+            if bool(ui_features.get("interactable_prompt", False)):
+                planes[2, :, : self.width // 2] = 255
+            if bool(ui_features.get("dead", False)):
+                planes[2, :, self.width // 2 :] = 255
+
+        return planes
 
     @property
     def observation_shape(self) -> tuple[int, int, int]:
         """Return the shape of the output observation: (stack_size, H, W)."""
-        return (self.stack_size, self.height, self.width)
+        return (self.stack_size + self.semantic_ui_channels, self.height, self.width)
 
 
 class RegionCropper:

@@ -115,6 +115,30 @@ python run_reward_calibration.py --window-title "MegaBonk" --quick-hud --regions
 - Press `Space` or `Enter` to confirm.
 - Press `c` to skip/retry the current item.
 
+
+## Interface recognition for smarter decisions
+
+The environment now exposes a dedicated UI-recognition layer to the policy. In addition to the downscaled gameplay frames, the observation can include semantic UI channels configured with:
+
+```yaml
+preprocessing:
+  semantic_ui_channels: 3
+
+ui:
+  enabled: true
+  templates:
+    perk_choice: "Configs/templates/level_up.png"
+    interact_prompt: "Configs/templates/interact_prompt.png"
+    main_menu: "Configs/templates/main_menu.png"
+    stage_select: "Configs/templates/stage_select.png"
+    pause_menu: "Configs/templates/pause_menu.png"
+    loading_screen: "Configs/templates/loading_screen.png"
+```
+
+These channels encode HP, XP, score, perk/level-up screens, menus, death state, and interactable prompts as machine-readable planes appended to the CNN input. That means the model does not need to infer every important UI state from tiny 84×84 pixels alone. The same recognizer is also logged under `info["ui"]` at every environment step so you can debug exactly what the agent thinks is on screen.
+
+For best results, capture small template images from your own MegaBonk resolution/language and save them under `Configs/templates/`. The defaults are safe: missing optional templates are skipped with warnings, while the already-calibrated `level_up.png` can immediately drive perk-choice recognition.
+
 ## 4. Configure skill/perk/item handling
 
 The default config gives the AI an explicit interact action:

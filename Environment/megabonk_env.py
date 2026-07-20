@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+import cv2
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
@@ -26,6 +27,17 @@ from Environment.rewards import RewardCalculator, RewardConfig
 from Environment.ui_recognition import UIRecognitionConfig, UIRecognizer
 
 logger = logging.getLogger(__name__)
+
+
+def _key_sequence(value: Any, fallback: list[str] | None = None) -> list[str]:
+    """Normalize a configured UI navigation key or key list."""
+    if value is None:
+        return list(fallback or [])
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, (list, tuple)):
+        return [str(key) for key in value if key]
+    return list(fallback or [])
 
 
 class MegaBonkEnv(gym.Env):
@@ -163,6 +175,47 @@ class MegaBonkEnv(gym.Env):
         self._auto_pause_back_key = env_cfg.get("auto_pause_back_key", "escape")
         self._auto_ui_cooldown_steps = env_cfg.get("auto_ui_cooldown_steps", 20)
         self._last_auto_ui_step = -self._auto_ui_cooldown_steps
+        self._auto_ui_sequences = {
+            "death_restart": _key_sequence(
+                env_cfg.get("auto_death_restart_keys"),
+                [self._auto_death_restart_key],
+            ),
+            "main_menu": _key_sequence(
+                env_cfg.get("auto_main_menu_keys"),
+                [self._auto_menu_confirm_key],
+            ),
+            "character_select": _key_sequence(
+                env_cfg.get("auto_character_select_keys"),
+                [self._auto_menu_confirm_key],
+            ),
+            "stage_select": _key_sequence(
+                env_cfg.get("auto_stage_select_keys"),
+                [self._auto_menu_confirm_key],
+            ),
+            "difficulty_select": _key_sequence(
+                env_cfg.get("auto_difficulty_select_keys"),
+                [self._auto_menu_confirm_key],
+            ),
+            "confirmation_dialog": _key_sequence(
+                env_cfg.get("auto_confirmation_dialog_keys"),
+                [self._auto_menu_confirm_key],
+            ),
+            "pause_back": _key_sequence(
+                env_cfg.get("auto_pause_back_keys"),
+                [self._auto_pause_back_key],
+            ),
+            "blocking_menu": _key_sequence(
+                env_cfg.get("auto_blocking_menu_keys"),
+                [self._auto_menu_confirm_key],
+            ),
+            "loading_screen": _key_sequence(
+                env_cfg.get("auto_loading_screen_keys"),
+                [],
+            ),
+        }
+        self._auto_ui_sequence_positions = {
+            name: 0 for name in self._auto_ui_sequences
+        }
 
         # --- Spaces ---
         obs_shape = self._preprocessor.observation_shape  # (4, 84, 84)
@@ -224,9 +277,13 @@ class MegaBonkEnv(gym.Env):
         self._last_auto_confirm_step = -self._auto_confirm_cooldown_steps
         self._last_auto_interact_step = 0
         self._last_auto_ui_step = -self._auto_ui_cooldown_steps
+        self._auto_ui_sequence_positions = {
+            name: 0 for name in self._auto_ui_sequences
+        }
 
         # Wait for game to be ready (post-death screen, loading, etc.)
         time.sleep(self._reset_delay)
+        self._last_auto_ui_step = -self._auto_ui_cooldown_steps
 
         # Capture initial observation
         frame = self._capture.get_latest_frame()
@@ -276,6 +333,13 @@ class MegaBonkEnv(gym.Env):
         if frame is None:
             frame = self._last_raw_frame
         else:
+            self._last_raw_frame = frame
+        if frame is None:
+            logger.warning("No frame available on step, using black frame")
+            frame = np.zeros(
+                (self._preprocessor.height, self._preprocessor.width, 3),
+                dtype=np.uint8,
+            )
             self._last_raw_frame = frame
 
         # Calculate reward from the raw (full-res) frame
@@ -332,29 +396,51 @@ class MegaBonkEnv(gym.Env):
         if not allow_immediate and steps_since_last < self._auto_ui_cooldown_steps:
             return info
 
-        key = None
-        reason = None
-        if bool(ui_info.get("dead", False)) or bool(
-            ui_info.get("game_over", False)
-        ) or bool(ui_info.get("run_summary", False)):
-            key = self._auto_death_restart_key
-            reason = "death_restart"
-        elif bool(ui_info.get("blocking_menu", False)) or bool(
-            ui_info.get("main_menu", False)
-        ) or bool(ui_info.get("stage_select", False)):
-            key = self._auto_menu_confirm_key
-            reason = "menu_confirm"
-        elif bool(ui_info.get("pause_menu", False)):
-            key = self._auto_pause_back_key
-            reason = "pause_back"
-
-        if key is None:
+        reason = self._auto_ui_reason(ui_info)
+        if reason is None:
             return info
 
+        keys = self._auto_ui_sequences.get(reason, [])
+        if not keys:
+            info.update({"reason": reason})
+            return info
+
+        key = self._next_auto_ui_key(reason, keys)
         self._controller.press_key(key, duration=0.05)
         self._last_auto_ui_step = self._current_step
         info.update({"triggered": True, "key": key, "reason": reason})
         return info
+
+    def _auto_ui_reason(self, ui_info: dict) -> str | None:
+        """Return the most specific configured UI navigation reason."""
+        if bool(ui_info.get("dead", False)) or bool(
+            ui_info.get("game_over", False)
+        ) or bool(ui_info.get("run_summary", False)):
+            return "death_restart"
+        if bool(ui_info.get("pause_menu", False)):
+            return "pause_back"
+
+        for reason in (
+            "main_menu",
+            "character_select",
+            "stage_select",
+            "difficulty_select",
+            "confirmation_dialog",
+            "loading_screen",
+        ):
+            if bool(ui_info.get(reason, False)):
+                return reason
+
+        if bool(ui_info.get("blocking_menu", False)):
+            return "blocking_menu"
+        return None
+
+    def _next_auto_ui_key(self, reason: str, keys: list[str]) -> str:
+        """Cycle through the configured key sequence for a recognized UI state."""
+        position = self._auto_ui_sequence_positions.get(reason, 0)
+        key = keys[position % len(keys)]
+        self._auto_ui_sequence_positions[reason] = position + 1
+        return key
 
     def _maybe_auto_confirm_choice(self, ui_info: dict) -> dict:
         """Confirm perk/skill choice screens when recognized by UI perception."""
@@ -415,8 +501,6 @@ class MegaBonkEnv(gym.Env):
     def render(self) -> Optional[np.ndarray]:
         """Render the current frame (for human visualization)."""
         if self.render_mode == "human" and self._last_raw_frame is not None:
-            import cv2
-
             display = cv2.resize(self._last_raw_frame, (640, 360))
             cv2.imshow("MegaBonk AI", display)
             cv2.waitKey(1)
@@ -430,9 +514,8 @@ class MegaBonkEnv(gym.Env):
         self._capture_started = False
 
         try:
-            import cv2
             cv2.destroyAllWindows()
-        except Exception:
+        except cv2.error:
             pass
 
         logger.info("MegaBonkEnv closed")

@@ -154,6 +154,8 @@ class BarReader:
         Returns:
             Fill percentage (0.0 to 1.0).
         """
+        if image is None or image.size == 0:
+            return 0.0
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, color_lower, color_upper)
 
@@ -248,6 +250,13 @@ class TemplateDetector:
             return False
 
         template = self._templates[template_name]
+        if (
+            frame is None
+            or frame.size == 0
+            or frame.shape[0] < template.shape[0]
+            or frame.shape[1] < template.shape[1]
+        ):
+            return False
         result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(result)
 
@@ -438,5 +447,10 @@ class RewardCalculator:
         region: tuple[int, int, int, int],
     ) -> np.ndarray:
         """Crop a region from the frame."""
-        left, top, right, bottom = region
+        height, width = frame.shape[:2]
+        left, top, right, bottom = [int(value) for value in region]
+        left = max(0, min(left, width - 1))
+        right = max(left + 1, min(right, width))
+        top = max(0, min(top, height - 1))
+        bottom = max(top + 1, min(bottom, height))
         return frame[top:bottom, left:right]

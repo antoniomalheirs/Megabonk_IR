@@ -154,6 +154,18 @@ environment:
   auto_menu_confirm_key: "enter"
   auto_death_restart_key: "enter"
   auto_pause_back_key: "escape"
+  # Optional per-screen navigation sequences. Use these when MegaBonk needs
+  # different keys after game over, e.g. main menu -> character -> stage.
+  # Each list advances one key per auto_ui_cooldown_steps while that screen is visible.
+  auto_death_restart_keys: ["enter"]
+  auto_main_menu_keys: ["enter"]
+  auto_character_select_keys: ["enter"]
+  auto_stage_select_keys: ["enter"]
+  auto_difficulty_select_keys: ["enter"]
+  auto_confirmation_dialog_keys: ["enter"]
+  auto_pause_back_keys: ["escape"]
+  auto_blocking_menu_keys: ["enter"]
+  auto_loading_screen_keys: []
   auto_ui_cooldown_steps: 20
 
 # --- PPO Hyperparameters ---

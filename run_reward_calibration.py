@@ -124,7 +124,7 @@ def resolve_capture_region(args: argparse.Namespace, config: dict[str, Any]) -> 
 
 
 def load_frame(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, Region | None]:
-    """Load the calibration frame from disk or live capture, returning the capture region used."""
+    """Load the first calibration frame, returning the capture region used."""
     if args.image:
         frame = cv2.imread(str(args.image))
         if frame is None:
@@ -132,6 +132,76 @@ def load_frame(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, R
         return frame, None
     region = resolve_capture_region(args, config)
     return capture_frame(args.delay, args.output_color, region), region
+
+
+def refresh_frame(args: argparse.Namespace, capture_region: Region | None, label: str):
+    """Return a fresh frame before selecting an on-screen calibration target."""
+    if args.image:
+        print(f"Using existing screenshot for {label} (--image).")
+        frame = cv2.imread(str(args.image))
+        if frame is None:
+            raise RuntimeError(f"Failed to read image: {args.image}")
+        return frame
+
+    print(f"\nRefresh the game state for {label}, then wait for the new capture.")
+    return capture_frame(args.delay, args.output_color, capture_region)
+
+
+def choose_capture_or_recapture(image, label: str) -> str:
+    """Show the current capture and let the user accept, restart or skip it."""
+    window_name = f"Preview {label} (Enter select, r restart, c skip)"
+    preview = image.copy()
+    cv2.putText(
+        preview,
+        "Enter/Space: select | r: restart capture | c: skip",
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 255),
+        2,
+    )
+    print(
+        f"Previewing {label}. Press ENTER/SPACE to select, "
+        "'r' to restart only this capture, or 'c' to skip."
+    )
+
+    while True:
+        cv2.imshow(window_name, preview)
+        key = cv2.waitKey(0) & 0xFF
+        if key in (13, 10, 32):
+            cv2.destroyWindow(window_name)
+            return "select"
+        if key in (ord("r"), ord("R")):
+            cv2.destroyWindow(window_name)
+            return "recapture"
+        if key == ord("c"):
+            cv2.destroyWindow(window_name)
+            return "skip"
+        print("Invalid key. Use ENTER/SPACE to select, 'r' to restart or 'c' to skip.")
+
+
+def select_region_from_fresh_capture(
+    args: argparse.Namespace,
+    capture_region: Region | None,
+    label: str,
+) -> tuple[Any, Region | None]:
+    """Capture/restart the current target until the user accepts a frame to select."""
+    while True:
+        frame = refresh_frame(args, capture_region, label)
+        print(f"Captured fresh frame shape for {label}: {frame.shape}")
+        if args.image:
+            action = "select"
+        else:
+            action = choose_capture_or_recapture(frame, label)
+
+        if action == "recapture":
+            print(f"Restarting capture for {label} only...")
+            continue
+        if action == "skip":
+            print(f"{label}: skipped.")
+            return frame, None
+
+        return frame, select_region(frame, label)
 
 
 def draw_preview(image, regions: dict[str, Region]):
@@ -208,7 +278,7 @@ def main() -> None:
     )
     parser.add_argument("--list-windows", action="store_true", help="List visible Windows titles and exit")
     parser.add_argument("--skip-ocr-test", action="store_true", help="Do not initialize EasyOCR while calibrating the score box")
-    parser.add_argument("--delay", type=float, default=3.0, help="Seconds to wait before live capture")
+    parser.add_argument("--delay", type=float, default=3.0, help="Seconds to wait before each live capture")
     parser.add_argument("--output-color", default="BGR", choices=["BGR", "RGB"], help="DXCam output color")
     parser.add_argument("--preview", type=Path, default=project_root / "Configs" / "calibration_preview.png")
     parser.add_argument("--templates", action="store_true", help="Also select and save game-over/level-up templates")
@@ -244,6 +314,7 @@ def main() -> None:
         return
 
     selected: dict[str, Region] = {}
+    selected_preview_frame = frame
     wanted = set(args.regions or ["hp", "xp", "score"])
     region_key_to_short = {
         "hp_region": "hp",
@@ -253,9 +324,10 @@ def main() -> None:
     for key, label in HUD_TARGETS.items():
         if region_key_to_short[key] not in wanted:
             continue
-        region = select_region(frame, label)
+        frame, region = select_region_from_fresh_capture(args, capture_region, label)
         if region is None:
             continue
+        selected_preview_frame = frame
         selected[key] = region
         print(f"{key}: {region}")
         crop = crop_region(frame, region)
@@ -274,7 +346,7 @@ def main() -> None:
             ("game_over_template", "Game Over Template", "game_over.png"),
             ("level_up_template", "Level Up Template", "level_up.png"),
         ]:
-            region = select_region(frame, label)
+            frame, region = select_region_from_fresh_capture(args, capture_region, label)
             if region is not None:
                 templates[key] = save_template(
                     frame,
@@ -285,7 +357,7 @@ def main() -> None:
 
     if selected:
         args.preview.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(args.preview), draw_preview(frame, selected))
+        cv2.imwrite(str(args.preview), draw_preview(selected_preview_frame, selected))
         print(f"Saved annotated preview: {args.preview}")
 
     print("\n--- Summary for default.yaml ---")

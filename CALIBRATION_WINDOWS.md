@@ -34,8 +34,8 @@ The tool will:
 
 1. find and focus the MegaBonk window;
 2. capture only that window and save it as `capture.region` in `Configs/default.yaml`;
-3. ask you to drag rectangles around the HP bar, XP bar and score counter;
-4. optionally ask for game-over and level-up templates when `--templates` is used;
+3. capture a fresh screenshot before each HP bar, XP bar and score counter rectangle;
+4. optionally capture a fresh screenshot before each game-over and level-up template when `--templates` is used;
 5. save an annotated preview at `Configs/calibration_preview.png`;
 6. create `Configs/default.yaml.bak` before writing changes.
 
@@ -63,8 +63,11 @@ python run_reward_calibration.py --no-window-region --update-config --templates 
 
 ## Controls during selection
 
+- First, inspect the preview capture for the current HUD/template target.
+- Press `r` on the preview to restart only the current target capture if that screenshot is wrong.
+- Press `Space` or `Enter` on the preview to open rectangle selection for that capture.
 - Drag with the mouse to draw a rectangle.
-- Press `Space` or `Enter` to accept it.
+- Press `Space` or `Enter` to accept the rectangle.
 - Press `c` to skip the current region.
 
 After calibration, inspect `Configs/calibration_preview.png`. If a rectangle is wrong, rerun the command; the previous YAML is backed up before each write.
@@ -83,7 +86,7 @@ This is equivalent to:
 python run_reward_calibration.py --window-title "MegaBonk" --quick-hud --preview Configs\hud_preview.png
 ```
 
-It only asks for HP, XP and score boxes, updates `Configs/default.yaml`, skips the slow OCR model startup, and saves `Configs/hud_preview.png`.
+It asks for HP, XP and score boxes, takes a fresh live screenshot before each box, lets you press `r` to restart only the current HUD capture when the screenshot is wrong, updates `Configs/default.yaml`, skips the slow OCR model startup, and saves `Configs/hud_preview.png`.
 
 To review the boxes currently saved in the YAML without changing anything:
 

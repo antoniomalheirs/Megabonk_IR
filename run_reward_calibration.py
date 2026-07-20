@@ -325,9 +325,9 @@ def main() -> None:
         if region_key_to_short[key] not in wanted:
             continue
         frame, region = select_region_from_fresh_capture(args, capture_region, label)
-        selected_preview_frame = frame
         if region is None:
             continue
+        selected_preview_frame = frame
         selected[key] = region
         print(f"{key}: {region}")
         crop = crop_region(frame, region)

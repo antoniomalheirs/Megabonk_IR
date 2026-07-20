@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+import cv2
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
@@ -207,9 +208,14 @@ class MegaBonkEnv(gym.Env):
                 env_cfg.get("auto_blocking_menu_keys"),
                 [self._auto_menu_confirm_key],
             ),
-            "loading_screen": _key_sequence(env_cfg.get("auto_loading_screen_keys"), []),
+            "loading_screen": _key_sequence(
+                env_cfg.get("auto_loading_screen_keys"),
+                [],
+            ),
         }
-        self._auto_ui_sequence_positions = {name: 0 for name in self._auto_ui_sequences}
+        self._auto_ui_sequence_positions = {
+            name: 0 for name in self._auto_ui_sequences
+        }
 
         # --- Spaces ---
         obs_shape = self._preprocessor.observation_shape  # (4, 84, 84)
@@ -271,6 +277,9 @@ class MegaBonkEnv(gym.Env):
         self._last_auto_confirm_step = -self._auto_confirm_cooldown_steps
         self._last_auto_interact_step = 0
         self._last_auto_ui_step = -self._auto_ui_cooldown_steps
+        self._auto_ui_sequence_positions = {
+            name: 0 for name in self._auto_ui_sequences
+        }
 
         # Wait for game to be ready (post-death screen, loading, etc.)
         time.sleep(self._reset_delay)
@@ -324,6 +333,13 @@ class MegaBonkEnv(gym.Env):
         if frame is None:
             frame = self._last_raw_frame
         else:
+            self._last_raw_frame = frame
+        if frame is None:
+            logger.warning("No frame available on step, using black frame")
+            frame = np.zeros(
+                (self._preprocessor.height, self._preprocessor.width, 3),
+                dtype=np.uint8,
+            )
             self._last_raw_frame = frame
 
         # Calculate reward from the raw (full-res) frame
@@ -485,8 +501,6 @@ class MegaBonkEnv(gym.Env):
     def render(self) -> Optional[np.ndarray]:
         """Render the current frame (for human visualization)."""
         if self.render_mode == "human" and self._last_raw_frame is not None:
-            import cv2
-
             display = cv2.resize(self._last_raw_frame, (640, 360))
             cv2.imshow("MegaBonk AI", display)
             cv2.waitKey(1)
@@ -500,9 +514,8 @@ class MegaBonkEnv(gym.Env):
         self._capture_started = False
 
         try:
-            import cv2
             cv2.destroyAllWindows()
-        except Exception:
+        except cv2.error:
             pass
 
         logger.info("MegaBonkEnv closed")

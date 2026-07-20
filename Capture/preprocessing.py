@@ -83,8 +83,15 @@ class FramePreprocessor:
         while len(self._frame_stack) < self.stack_size:
             self._frame_stack.appendleft(self._frame_stack[0].copy())
 
-        # Stack into (N, H, W) array — channels-first
+        # Stack into channels-first format expected by SB3 CnnPolicy.
+        # Grayscale frames are (N, H, W); color frames become (N*C, H, W).
         stacked = np.stack(list(self._frame_stack), axis=0)
+        if stacked.ndim == 4:
+            stacked = stacked.transpose(0, 3, 1, 2).reshape(
+                self.stack_size * stacked.shape[-1],
+                self.height,
+                self.width,
+            )
         if self.semantic_ui_channels > 0:
             semantic = self._build_semantic_planes(ui_features or {})
             stacked = np.concatenate([stacked, semantic], axis=0)
@@ -127,6 +134,12 @@ class FramePreprocessor:
         while len(self._frame_stack) < self.stack_size:
             self._frame_stack.appendleft(self._frame_stack[0].copy())
         stacked = np.stack(list(self._frame_stack), axis=0)
+        if stacked.ndim == 4:
+            stacked = stacked.transpose(0, 3, 1, 2).reshape(
+                self.stack_size * stacked.shape[-1],
+                self.height,
+                self.width,
+            )
         if self.semantic_ui_channels > 0:
             semantic = self._build_semantic_planes({})
             stacked = np.concatenate([stacked, semantic], axis=0)
@@ -186,8 +199,11 @@ class FramePreprocessor:
 
     @property
     def observation_shape(self) -> tuple[int, int, int]:
-        """Return the shape of the output observation: (stack_size, H, W)."""
-        return (self.stack_size + self.semantic_ui_channels, self.height, self.width)
+        """Return the shape of the output observation: (channels, H, W)."""
+        base_channels = (
+            self.stack_size if self.grayscale else self.stack_size * 3
+        )
+        return (base_channels + self.semantic_ui_channels, self.height, self.width)
 
 
 class RegionCropper:

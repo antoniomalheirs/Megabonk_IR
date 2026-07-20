@@ -174,6 +174,9 @@ class MegaBonkEnv(gym.Env):
         self._auto_death_restart_key = env_cfg.get("auto_death_restart_key", "enter")
         self._auto_pause_back_key = env_cfg.get("auto_pause_back_key", "escape")
         self._auto_ui_cooldown_steps = env_cfg.get("auto_ui_cooldown_steps", 20)
+        self._ui_action_pause_seconds = env_cfg.get("ui_action_pause_seconds", 0.15)
+        self._ui_release_before_input = env_cfg.get("ui_release_before_input", True)
+        self._pause_agent_on_blocking_ui = env_cfg.get("pause_agent_on_blocking_ui", True)
         self._last_auto_ui_step = -self._auto_ui_cooldown_steps
         self._auto_ui_sequences = {
             "death_restart": _key_sequence(
@@ -321,10 +324,47 @@ class MegaBonkEnv(gym.Env):
         """
         self._current_step += 1
 
-        # Execute the action (keyboard + mouse)
-        action_info = self._controller.execute(action)
+        # Capture and classify the current UI before sending policy inputs.
+        # Blocking menus/choice screens should receive deliberate UI navigation
+        # keys instead of stale movement/mouse actions from the agent.
+        frame = self._capture.get_latest_frame()
+        if frame is None:
+            frame = self._last_raw_frame
+        pre_ui_info = None
+        pre_auto_ui_info = {"triggered": False, "key": None, "reason": None}
+        pre_auto_choice_info = {
+            "triggered": False,
+            "key": None,
+            "pending": self._pending_auto_confirms,
+        }
+        if frame is not None:
+            pre_reward_info = self._reward_calc.peek(frame)
+            pre_ui_info = self._ui_recognizer.recognize(frame, pre_reward_info)
+            if self._pause_agent_for_ui(pre_ui_info):
+                self._controller.release_all()
+                pre_auto_ui_info = self._maybe_auto_navigate_ui(pre_ui_info)
+                pre_auto_choice_info = self._maybe_auto_confirm_choice(pre_ui_info)
+                action_info = {
+                    "keys": [],
+                    "mouse_dx": 0,
+                    "mouse_dy": 0,
+                    "pixel_dx": 0,
+                    "pixel_dy": 0,
+                    "interact": False,
+                    "suppressed_for_ui": True,
+                }
+                if (
+                    not pre_auto_ui_info.get("triggered")
+                    and not pre_auto_choice_info.get("triggered")
+                    and self._ui_action_pause_seconds > 0
+                ):
+                    time.sleep(self._ui_action_pause_seconds)
+            else:
+                action_info = self._controller.execute(action)
+        else:
+            action_info = self._controller.execute(action)
 
-        # Wait for the action to take effect
+        # Wait for the action/UI interaction to take effect
         if self._step_delay > 0:
             time.sleep(self._step_delay)
 
@@ -347,8 +387,12 @@ class MegaBonkEnv(gym.Env):
         self._episode_reward += reward
 
         ui_info = self._ui_recognizer.recognize(frame, reward_info)
-        auto_ui_info = self._maybe_auto_navigate_ui(ui_info)
-        auto_choice_info = self._maybe_auto_confirm_choice(ui_info)
+        auto_ui_info = pre_auto_ui_info
+        auto_choice_info = pre_auto_choice_info
+        if not auto_ui_info.get("triggered"):
+            auto_ui_info = self._maybe_auto_navigate_ui(ui_info)
+        if not auto_choice_info.get("triggered"):
+            auto_choice_info = self._maybe_auto_confirm_choice(ui_info)
         auto_interact_info = self._maybe_auto_interact(action_info, ui_info)
 
         # Preprocess for the agent
@@ -365,6 +409,7 @@ class MegaBonkEnv(gym.Env):
             "episode_step": self._current_step,
             "episode_reward": self._episode_reward,
             "action": action_info,
+            "pre_ui": pre_ui_info,
             "auto_choice": auto_choice_info,
             "auto_interact": auto_interact_info,
             "auto_ui": auto_ui_info,
@@ -383,6 +428,25 @@ class MegaBonkEnv(gym.Env):
             )
 
         return observation, reward, terminated, truncated, info
+
+    def _pause_agent_for_ui(self, ui_info: dict) -> bool:
+        """Return True when UI should own input for this step."""
+        if not self._pause_agent_on_blocking_ui:
+            return False
+        return self._auto_ui_reason(ui_info) is not None or bool(
+            ui_info.get("level_up", False)
+            or ui_info.get("level_up_screen", False)
+            or ui_info.get("perk_choice", False)
+            or ui_info.get("choice_screen", False)
+        )
+
+    def _press_ui_key(self, key: str, duration: float = 0.05) -> None:
+        """Safely send a menu/choice key with optional release and settle pause."""
+        if self._ui_release_before_input:
+            self._controller.release_all()
+        self._controller.press_key(key, duration=duration)
+        if self._ui_action_pause_seconds > 0:
+            time.sleep(self._ui_action_pause_seconds)
 
     def _maybe_auto_navigate_ui(
         self, ui_info: dict, allow_immediate: bool = False
@@ -406,7 +470,7 @@ class MegaBonkEnv(gym.Env):
             return info
 
         key = self._next_auto_ui_key(reason, keys)
-        self._controller.press_key(key, duration=0.05)
+        self._press_ui_key(key, duration=0.05)
         self._last_auto_ui_step = self._current_step
         info.update({"triggered": True, "key": key, "reason": reason})
         return info
@@ -463,7 +527,7 @@ class MegaBonkEnv(gym.Env):
             info["pending"] = self._pending_auto_confirms
             return info
 
-        self._controller.press_key(self._auto_confirm_key, duration=0.05)
+        self._press_ui_key(self._auto_confirm_key, duration=0.05)
         self._pending_auto_confirms -= 1
         self._last_auto_confirm_step = self._current_step
         info.update(

@@ -136,6 +136,8 @@ environment:
 
 When the reward detector sees a level-up/perk-choice template or XP reset, the environment schedules confirm key presses, respecting the cooldown. This prevents training from freezing on a perk screen. If your game confirms perks with a different key, change `auto_confirm_key` in `Configs/default.yaml`.
 
+For game-over recovery, the environment first uses `auto_death_restart_keys`. If MegaBonk returns to the main menu and does not start another run, capture templates for each run-start screen (`main_menu`, `character_select`, `stage_select`, `difficulty_select`) and configure the matching per-screen key lists such as `auto_main_menu_keys`, `auto_character_select_keys`, `auto_stage_select_keys`, and `auto_difficulty_select_keys`. Each list advances one key every `auto_ui_cooldown_steps` while that template is visible.
+
 For totems and pickups, the environment periodically taps `auto_interact_key`. This makes the character try button totems and nearby/proximity interactables even before the policy has learned perfect timing. The policy still receives the explicit interact action and can learn to use it directly.
 
 If you want the neural network to learn all perk menu navigation and totem timing manually, set `auto_confirm_level_up: false` and `auto_interact_enabled: false`, then train a fresh model.

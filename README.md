@@ -121,14 +121,18 @@ environment:
   auto_interact_enabled: true
   auto_interact_key: "e"
   auto_navigate_ui: true
-  auto_menu_confirm_key: "enter"
-  auto_death_restart_key: "enter"
-  auto_pause_back_key: "escape"
+  auto_death_restart_keys: ["enter"]
+  auto_main_menu_keys: ["enter"]
+  auto_character_select_keys: ["enter"]
+  auto_stage_select_keys: ["enter"]
+  auto_difficulty_select_keys: ["enter"]
+  auto_pause_back_keys: ["escape"]
 ```
 
 - Keep `auto_confirm_level_up` enabled when you want training to continue through perk screens automatically.
 - Keep `auto_interact_enabled` enabled early in training so the agent can still use nearby prompts while it learns.
 - Keep `auto_navigate_ui` enabled if you want the environment to enter runs, leave pause menus, and restart after death without manual input.
+- If the agent leaves game-over but gets lost on the main menu, calibrate templates for `main_menu`, `character_select`, `stage_select`, and `difficulty_select`, then set each `auto_*_keys` list to the exact key sequence your menu needs. Each visible screen advances one key per `auto_ui_cooldown_steps`.
 
 ### Step 7 — Configure rewards
 
@@ -305,7 +309,22 @@ ui:
 
 These channels encode HP, XP, score, perk/level-up screens, menus, death state, and interactable prompts as machine-readable planes appended to the CNN input. That means the model does not need to infer every important UI state from tiny 84×84 pixels alone. The same recognizer is also logged under `info["ui"]` at every environment step so you can debug exactly what the agent thinks is on screen.
 
-When `environment.auto_navigate_ui` is enabled, recognized blocking screens are handled automatically: death/game-over presses the configured restart key, main menu/stage select presses the configured confirm key, and pause menu presses the configured back key. This keeps training from getting stuck before a run starts or after a run ends.
+When `environment.auto_navigate_ui` is enabled, recognized blocking screens are handled automatically. Death/game-over uses `auto_death_restart_keys`, pause uses `auto_pause_back_keys`, and each run-start screen can use its own sequence: `auto_main_menu_keys`, `auto_character_select_keys`, `auto_stage_select_keys`, `auto_difficulty_select_keys`, and `auto_confirmation_dialog_keys`. This matters because after game-over the game can land on the main menu, and one generic `Enter` press may not be enough to select character, stage, difficulty, and start a new run.
+
+Example for a game flow that needs Enter on the main menu, Enter on character select, Enter on stage select, and Enter on difficulty select:
+
+```yaml
+environment:
+  auto_navigate_ui: true
+  auto_death_restart_keys: ["enter"]
+  auto_main_menu_keys: ["enter"]
+  auto_character_select_keys: ["enter"]
+  auto_stage_select_keys: ["enter"]
+  auto_difficulty_select_keys: ["enter"]
+  auto_loading_screen_keys: []
+```
+
+If your menu cursor starts on the wrong option, add movement keys to that screen's list, for example `auto_main_menu_keys: ["down", "enter"]`. The environment presses one key from the active screen's list every `auto_ui_cooldown_steps`, cycling while that same template stays visible.
 
 For best results, capture small template images from your own MegaBonk resolution/language and save them under `Configs/templates/`. The defaults are safe: missing optional templates are skipped with warnings, while the already-calibrated `level_up.png` can immediately drive perk-choice recognition.
 
@@ -418,6 +437,29 @@ python Inference\play.py --config Configs\default.yaml --model Models\megabonk_p
 - Keep `environment.auto_interact_enabled: true` for button totems/proximity prompts during early training.
 - Lower `environment.auto_interact_every_steps` if it is not trying often enough.
 - Train a fresh model after changing the action space.
+
+### After game over it returns to the main menu but does not start a new run
+
+The environment is not reading the game state directly from memory. It only sees screenshots and template matches. If it gets past game-over and then stalls on the menu, usually one of these is wrong:
+
+- `ui.templates.main_menu`, `character_select`, `stage_select`, or `difficulty_select` is missing or not matching your current resolution/language.
+- The configured auto-navigation keys do not match the actual menu flow.
+- `auto_ui_cooldown_steps` is too high, so it waits too long between menu inputs.
+
+Fix it by capturing templates for each visible menu stage and configuring the per-screen key lists:
+
+```yaml
+environment:
+  auto_navigate_ui: true
+  auto_death_restart_keys: ["enter"]
+  auto_main_menu_keys: ["enter"]
+  auto_character_select_keys: ["enter"]
+  auto_stage_select_keys: ["enter"]
+  auto_difficulty_select_keys: ["enter"]
+  auto_ui_cooldown_steps: 20
+```
+
+Watch `info["ui"]` and `info["auto_ui"]` in logs/debug output: `ui` tells you which template is detected, and `auto_ui.reason`/`auto_ui.key` tells you which menu key the environment pressed.
 
 ### Training stops on perk/skill selection
 

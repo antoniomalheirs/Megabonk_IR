@@ -21,6 +21,9 @@ preprocessing:
   grayscale: true
   # Number of frames to stack
   frame_stack: 4
+  # Extra semantic planes appended to observation so the model receives
+  # explicit UI/HUD/menu/prompt state, not only downscaled pixels.
+  semantic_ui_channels: 3
 
 # --- Action Space ---
 actions:
@@ -75,6 +78,24 @@ rewards:
 
   # Template matching threshold (0.0 - 1.0)
   template_match_threshold: 0.8
+
+# --- UI Recognition ---
+ui:
+  # Exposes recognized HUD/menu/prompt state to the model and automation helpers.
+  enabled: true
+  template_match_threshold: 0.8
+  score_normalizer: 10000.0
+  # Optional templates, relative to project root. Add calibrated screenshots for
+  # your build/language/resolution; missing files are skipped with a warning.
+  templates:
+    perk_choice: "Configs/templates/level_up.png"
+    interact_prompt: "Configs/templates/interact_prompt.png"
+    main_menu: "Configs/templates/main_menu.png"
+    stage_select: "Configs/templates/stage_select.png"
+    pause_menu: "Configs/templates/pause_menu.png"
+    loading_screen: "Configs/templates/loading_screen.png"
+  # Optional search regions [left, top, right, bottom] to reduce false matches.
+  regions: {}
 
 # --- Environment ---
 environment:

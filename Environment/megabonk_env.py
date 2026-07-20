@@ -157,6 +157,12 @@ class MegaBonkEnv(gym.Env):
         self._auto_interact_every_steps = env_cfg.get("auto_interact_every_steps", 45)
         self._auto_interact_hold_duration = env_cfg.get("auto_interact_hold_duration", 0.05)
         self._last_auto_interact_step = 0
+        self._auto_navigate_ui = env_cfg.get("auto_navigate_ui", True)
+        self._auto_menu_confirm_key = env_cfg.get("auto_menu_confirm_key", "enter")
+        self._auto_death_restart_key = env_cfg.get("auto_death_restart_key", "enter")
+        self._auto_pause_back_key = env_cfg.get("auto_pause_back_key", "escape")
+        self._auto_ui_cooldown_steps = env_cfg.get("auto_ui_cooldown_steps", 20)
+        self._last_auto_ui_step = -self._auto_ui_cooldown_steps
 
         # --- Spaces ---
         obs_shape = self._preprocessor.observation_shape  # (4, 84, 84)
@@ -217,6 +223,7 @@ class MegaBonkEnv(gym.Env):
         self._pending_auto_confirms = 0
         self._last_auto_confirm_step = -self._auto_confirm_cooldown_steps
         self._last_auto_interact_step = 0
+        self._last_auto_ui_step = -self._auto_ui_cooldown_steps
 
         # Wait for game to be ready (post-death screen, loading, etc.)
         time.sleep(self._reset_delay)
@@ -232,9 +239,15 @@ class MegaBonkEnv(gym.Env):
 
         self._last_raw_frame = frame
         initial_ui = self._ui_recognizer.recognize(frame, {})
+        auto_ui = self._maybe_auto_navigate_ui(initial_ui, allow_immediate=True)
         observation = self._preprocessor.process(frame, initial_ui)
 
-        info = {"episode_step": 0, "raw_frame_shape": frame.shape, "ui": initial_ui}
+        info = {
+            "episode_step": 0,
+            "raw_frame_shape": frame.shape,
+            "ui": initial_ui,
+            "auto_ui": auto_ui,
+        }
         return observation, info
 
     def step(
@@ -270,6 +283,7 @@ class MegaBonkEnv(gym.Env):
         self._episode_reward += reward
 
         ui_info = self._ui_recognizer.recognize(frame, reward_info)
+        auto_ui_info = self._maybe_auto_navigate_ui(ui_info)
         auto_choice_info = self._maybe_auto_confirm_choice(ui_info)
         auto_interact_info = self._maybe_auto_interact(action_info, ui_info)
 
@@ -289,6 +303,7 @@ class MegaBonkEnv(gym.Env):
             "action": action_info,
             "auto_choice": auto_choice_info,
             "auto_interact": auto_interact_info,
+            "auto_ui": auto_ui_info,
             "ui": ui_info,
             **reward_info,
         }
@@ -304,6 +319,42 @@ class MegaBonkEnv(gym.Env):
             )
 
         return observation, reward, terminated, truncated, info
+
+    def _maybe_auto_navigate_ui(
+        self, ui_info: dict, allow_immediate: bool = False
+    ) -> dict:
+        """Navigate blocking menu/death screens detected by UI recognition."""
+        info = {"triggered": False, "key": None, "reason": None}
+        if not self._auto_navigate_ui:
+            return info
+
+        steps_since_last = self._current_step - self._last_auto_ui_step
+        if not allow_immediate and steps_since_last < self._auto_ui_cooldown_steps:
+            return info
+
+        key = None
+        reason = None
+        if bool(ui_info.get("dead", False)) or bool(
+            ui_info.get("game_over", False)
+        ) or bool(ui_info.get("run_summary", False)):
+            key = self._auto_death_restart_key
+            reason = "death_restart"
+        elif bool(ui_info.get("blocking_menu", False)) or bool(
+            ui_info.get("main_menu", False)
+        ) or bool(ui_info.get("stage_select", False)):
+            key = self._auto_menu_confirm_key
+            reason = "menu_confirm"
+        elif bool(ui_info.get("pause_menu", False)):
+            key = self._auto_pause_back_key
+            reason = "pause_back"
+
+        if key is None:
+            return info
+
+        self._controller.press_key(key, duration=0.05)
+        self._last_auto_ui_step = self._current_step
+        info.update({"triggered": True, "key": key, "reason": reason})
+        return info
 
     def _maybe_auto_confirm_choice(self, ui_info: dict) -> dict:
         """Confirm perk/skill choice screens when recognized by UI perception."""

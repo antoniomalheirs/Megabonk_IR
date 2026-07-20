@@ -137,7 +137,21 @@ ui:
 
 These channels encode HP, XP, score, perk/level-up screens, menus, death state, and interactable prompts as machine-readable planes appended to the CNN input. That means the model does not need to infer every important UI state from tiny 84×84 pixels alone. The same recognizer is also logged under `info["ui"]` at every environment step so you can debug exactly what the agent thinks is on screen.
 
+When `environment.auto_navigate_ui` is enabled, recognized blocking screens are handled automatically: death/game-over presses the configured restart key, main menu/stage select presses the configured confirm key, and pause menu presses the configured back key. This keeps training from getting stuck before a run starts or after a run ends.
+
 For best results, capture small template images from your own MegaBonk resolution/language and save them under `Configs/templates/`. The defaults are safe: missing optional templates are skipped with warnings, while the already-calibrated `level_up.png` can immediately drive perk-choice recognition.
+
+### Researched MegaBonk screen/template checklist
+
+Public guides and wiki pages describe MegaBonk as a run-based survivor roguelike with level-up upgrade choices, loot/items, shrines, chests, bosses, quests/unlocks, shop/meta-progression, character selection and stage/tier progression. Based on that flow, configure templates for these screen families:
+
+- **Run start:** `main_menu`, `character_select`, `stage_select`, `difficulty_select`, `loading_screen`.
+- **In-run choices:** `perk_choice`, `upgrade_choice`, `weapon_choice`, `tome_choice`, `item_choice`, `chest_reward`.
+- **Map interactions:** `interact_prompt`, `pickup_prompt`, `shrine_prompt`, `chest_prompt`, `portal_prompt`, `challenge_prompt`.
+- **Meta/options:** `shop`, `quests`, `unlocks`, `settings`, `credits`, `pause_menu`, `confirmation_dialog`.
+- **End of run:** `game_over`, `death_screen`, `results_screen`, `run_summary`.
+
+No internet list can guarantee every future patch screen. Treat this as a broad baseline and add a template whenever `info["ui"]` shows the agent is stuck on an unrecognized screen.
 
 ## 4. Configure skill/perk/item handling
 

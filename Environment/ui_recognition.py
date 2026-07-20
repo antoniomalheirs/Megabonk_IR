@@ -64,6 +64,9 @@ class UIRecognizer:
             "level_up_screen": bool(reward_info.get("level_up_screen", False)),
             "perk_choice": bool(reward_info.get("level_up_screen", False)),
             "interactable_prompt": False,
+            "choice_screen": False,
+            "blocking_menu": False,
+            "run_summary": False,
             "main_menu": False,
             "pause_menu": False,
             "stage_select": False,
@@ -79,15 +82,37 @@ class UIRecognizer:
             features[name] = detected
 
             # Common aliases used by the environment/model.
-            if name in {"perk_choice", "level_up", "level_up_screen"}:
+            if name in {"perk_choice", "level_up", "level_up_screen", "upgrade_choice", "item_choice", "weapon_choice", "tome_choice", "chest_reward"}:
                 features["perk_choice"] = features["perk_choice"] or detected
                 features["level_up_screen"] = features["level_up_screen"] or detected
-            elif name in {"interactable", "interact_prompt", "pickup_prompt"}:
+                features["choice_screen"] = features["choice_screen"] or detected
+            elif name in {"interactable", "interact_prompt", "pickup_prompt", "shrine_prompt", "chest_prompt", "npc_prompt", "portal_prompt", "challenge_prompt"}:
                 features["interactable_prompt"] = (
                     features["interactable_prompt"] or detected
                 )
+            elif name in {"main_menu", "stage_select", "character_select", "shop", "quests", "unlocks", "settings", "credits", "confirmation_dialog", "pause_menu", "loading_screen"}:
+                features["blocking_menu"] = features["blocking_menu"] or detected
+            elif name in {"game_over", "death_screen", "results_screen", "run_summary"}:
+                features["run_summary"] = features["run_summary"] or detected
             elif name in features:
                 features[name] = detected
+
+        features["blocking_menu"] = features["blocking_menu"] or any(
+            bool(features.get(name, False))
+            for name in (
+                "main_menu",
+                "stage_select",
+                "character_select",
+                "shop",
+                "quests",
+                "unlocks",
+                "settings",
+                "credits",
+                "confirmation_dialog",
+                "pause_menu",
+                "loading_screen",
+            )
+        )
 
         return features
 

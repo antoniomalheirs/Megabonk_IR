@@ -155,7 +155,25 @@ class FramePreprocessor:
             planes[0, 2 * self.height // 3 :, :] = int(np.clip(float(score) / self.score_normalizer, 0.0, 1.0) * 255)
 
         if self.semantic_ui_channels > 1:
-            menu_active = any(bool(ui_features.get(name, False)) for name in ("level_up_screen", "perk_choice", "main_menu", "pause_menu", "stage_select", "loading_screen"))
+            menu_active = any(
+                bool(ui_features.get(name, False))
+                for name in (
+                    "level_up_screen",
+                    "perk_choice",
+                    "choice_screen",
+                    "blocking_menu",
+                    "main_menu",
+                    "pause_menu",
+                    "stage_select",
+                    "character_select",
+                    "shop",
+                    "quests",
+                    "unlocks",
+                    "settings",
+                    "loading_screen",
+                    "run_summary",
+                )
+            )
             planes[1, :, :] = 255 if menu_active else 0
 
         if self.semantic_ui_channels > 2:

@@ -21,6 +21,9 @@ preprocessing:
   grayscale: true
   # Number of frames to stack
   frame_stack: 4
+  # Extra semantic planes appended to observation so the model receives
+  # explicit UI/HUD/menu/prompt state, not only downscaled pixels.
+  semantic_ui_channels: 3
 
 # --- Action Space ---
 actions:
@@ -76,6 +79,51 @@ rewards:
   # Template matching threshold (0.0 - 1.0)
   template_match_threshold: 0.8
 
+# --- UI Recognition ---
+ui:
+  # Exposes recognized HUD/menu/prompt state to the model and automation helpers.
+  enabled: true
+  template_match_threshold: 0.8
+  score_normalizer: 10000.0
+  # Optional templates, relative to project root. Add calibrated screenshots for
+  # your build/language/resolution; missing files are skipped with a warning.
+  templates:
+    # Run start / lobby flow
+    main_menu: "Configs/templates/main_menu.png"
+    character_select: "Configs/templates/character_select.png"
+    stage_select: "Configs/templates/stage_select.png"
+    difficulty_select: "Configs/templates/difficulty_select.png"
+    loading_screen: "Configs/templates/loading_screen.png"
+    # Upgrade/choice flow during a run
+    perk_choice: "Configs/templates/level_up.png"
+    upgrade_choice: "Configs/templates/upgrade_choice.png"
+    weapon_choice: "Configs/templates/weapon_choice.png"
+    tome_choice: "Configs/templates/tome_choice.png"
+    item_choice: "Configs/templates/item_choice.png"
+    chest_reward: "Configs/templates/chest_reward.png"
+    # Map interactables/prompts
+    interact_prompt: "Configs/templates/interact_prompt.png"
+    pickup_prompt: "Configs/templates/pickup_prompt.png"
+    shrine_prompt: "Configs/templates/shrine_prompt.png"
+    chest_prompt: "Configs/templates/chest_prompt.png"
+    portal_prompt: "Configs/templates/portal_prompt.png"
+    challenge_prompt: "Configs/templates/challenge_prompt.png"
+    # Meta/progression/options screens
+    shop: "Configs/templates/shop.png"
+    quests: "Configs/templates/quests.png"
+    unlocks: "Configs/templates/unlocks.png"
+    settings: "Configs/templates/settings.png"
+    credits: "Configs/templates/credits.png"
+    pause_menu: "Configs/templates/pause_menu.png"
+    confirmation_dialog: "Configs/templates/confirmation_dialog.png"
+    # End-of-run flow
+    game_over: "Configs/templates/game_over.png"
+    death_screen: "Configs/templates/death_screen.png"
+    results_screen: "Configs/templates/results_screen.png"
+    run_summary: "Configs/templates/run_summary.png"
+  # Optional search regions [left, top, right, bottom] to reduce false matches.
+  regions: {}
+
 # --- Environment ---
 environment:
   # Max steps per episode (0 = unlimited, episode ends on death)
@@ -99,6 +147,14 @@ environment:
   auto_interact_key: "e"
   auto_interact_every_steps: 45
   auto_interact_hold_duration: 0.05
+  # Automatically clear blocking UI states so training can enter runs, recover
+  # after death and continue if pause/menu screens appear. These keys should
+  # match your in-game menu bindings.
+  auto_navigate_ui: true
+  auto_menu_confirm_key: "enter"
+  auto_death_restart_key: "enter"
+  auto_pause_back_key: "escape"
+  auto_ui_cooldown_steps: 20
 
 # --- PPO Hyperparameters ---
 ppo:

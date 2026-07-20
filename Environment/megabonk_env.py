@@ -23,6 +23,7 @@ from Capture.screen_capture import ScreenCapture
 from Capture.preprocessing import FramePreprocessor
 from Environment.actions import ActionController, ActionConfig
 from Environment.rewards import RewardCalculator, RewardConfig
+from Environment.ui_recognition import UIRecognitionConfig, UIRecognizer
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ class MegaBonkEnv(gym.Env):
         act_cfg = config.get("actions", {})
         rew_cfg = config.get("rewards", {})
         env_cfg = config.get("environment", {})
+        ui_cfg = config.get("ui", {})
 
         # --- Screen Capture ---
         region = cap_cfg.get("region")
@@ -81,6 +83,8 @@ class MegaBonkEnv(gym.Env):
             height=pre_cfg.get("resize_height", 84),
             grayscale=pre_cfg.get("grayscale", True),
             stack_size=pre_cfg.get("frame_stack", 4),
+            semantic_ui_channels=pre_cfg.get("semantic_ui_channels", 3),
+            score_normalizer=ui_cfg.get("score_normalizer", 10000.0),
         )
 
         # --- Action Controller ---
@@ -120,6 +124,22 @@ class MegaBonkEnv(gym.Env):
         project_root = str(Path(__file__).resolve().parent.parent)
         self._reward_calc = RewardCalculator(reward_config, project_root)
 
+        # --- UI recognizer ---
+        ui_regions = {
+            name: tuple(region) for name, region in ui_cfg.get("regions", {}).items()
+        }
+        ui_config = UIRecognitionConfig(
+            enabled=ui_cfg.get("enabled", True),
+            template_match_threshold=ui_cfg.get(
+                "template_match_threshold",
+                rew_cfg.get("template_match_threshold", 0.8),
+            ),
+            templates=ui_cfg.get("templates", {}),
+            regions=ui_regions,
+            score_normalizer=ui_cfg.get("score_normalizer", 10000.0),
+        )
+        self._ui_recognizer = UIRecognizer(ui_config, project_root)
+
         # --- Environment settings ---
         self._max_steps = env_cfg.get("max_steps", 0)
         self._step_delay = env_cfg.get("step_delay", 0.033)
@@ -137,6 +157,12 @@ class MegaBonkEnv(gym.Env):
         self._auto_interact_every_steps = env_cfg.get("auto_interact_every_steps", 45)
         self._auto_interact_hold_duration = env_cfg.get("auto_interact_hold_duration", 0.05)
         self._last_auto_interact_step = 0
+        self._auto_navigate_ui = env_cfg.get("auto_navigate_ui", True)
+        self._auto_menu_confirm_key = env_cfg.get("auto_menu_confirm_key", "enter")
+        self._auto_death_restart_key = env_cfg.get("auto_death_restart_key", "enter")
+        self._auto_pause_back_key = env_cfg.get("auto_pause_back_key", "escape")
+        self._auto_ui_cooldown_steps = env_cfg.get("auto_ui_cooldown_steps", 20)
+        self._last_auto_ui_step = -self._auto_ui_cooldown_steps
 
         # --- Spaces ---
         obs_shape = self._preprocessor.observation_shape  # (4, 84, 84)
@@ -197,6 +223,7 @@ class MegaBonkEnv(gym.Env):
         self._pending_auto_confirms = 0
         self._last_auto_confirm_step = -self._auto_confirm_cooldown_steps
         self._last_auto_interact_step = 0
+        self._last_auto_ui_step = -self._auto_ui_cooldown_steps
 
         # Wait for game to be ready (post-death screen, loading, etc.)
         time.sleep(self._reset_delay)
@@ -211,9 +238,16 @@ class MegaBonkEnv(gym.Env):
             frame = np.zeros((h, w, 3), dtype=np.uint8)
 
         self._last_raw_frame = frame
-        observation = self._preprocessor.process(frame)
+        initial_ui = self._ui_recognizer.recognize(frame, {})
+        auto_ui = self._maybe_auto_navigate_ui(initial_ui, allow_immediate=True)
+        observation = self._preprocessor.process(frame, initial_ui)
 
-        info = {"episode_step": 0, "raw_frame_shape": frame.shape}
+        info = {
+            "episode_step": 0,
+            "raw_frame_shape": frame.shape,
+            "ui": initial_ui,
+            "auto_ui": auto_ui,
+        }
         return observation, info
 
     def step(
@@ -248,11 +282,13 @@ class MegaBonkEnv(gym.Env):
         reward, reward_info = self._reward_calc.calculate(frame)
         self._episode_reward += reward
 
-        auto_choice_info = self._maybe_auto_confirm_choice(reward_info)
-        auto_interact_info = self._maybe_auto_interact(action_info)
+        ui_info = self._ui_recognizer.recognize(frame, reward_info)
+        auto_ui_info = self._maybe_auto_navigate_ui(ui_info)
+        auto_choice_info = self._maybe_auto_confirm_choice(ui_info)
+        auto_interact_info = self._maybe_auto_interact(action_info, ui_info)
 
         # Preprocess for the agent
-        observation = self._preprocessor.process(frame)
+        observation = self._preprocessor.process(frame, ui_info)
 
         # Check termination conditions
         terminated = reward_info.get("dead", False)
@@ -267,6 +303,8 @@ class MegaBonkEnv(gym.Env):
             "action": action_info,
             "auto_choice": auto_choice_info,
             "auto_interact": auto_interact_info,
+            "auto_ui": auto_ui_info,
+            "ui": ui_info,
             **reward_info,
         }
 
@@ -282,15 +320,51 @@ class MegaBonkEnv(gym.Env):
 
         return observation, reward, terminated, truncated, info
 
-    def _maybe_auto_confirm_choice(self, reward_info: dict) -> dict:
-        """Confirm perk/skill choice screens when a level-up is detected."""
+    def _maybe_auto_navigate_ui(
+        self, ui_info: dict, allow_immediate: bool = False
+    ) -> dict:
+        """Navigate blocking menu/death screens detected by UI recognition."""
+        info = {"triggered": False, "key": None, "reason": None}
+        if not self._auto_navigate_ui:
+            return info
+
+        steps_since_last = self._current_step - self._last_auto_ui_step
+        if not allow_immediate and steps_since_last < self._auto_ui_cooldown_steps:
+            return info
+
+        key = None
+        reason = None
+        if bool(ui_info.get("dead", False)) or bool(
+            ui_info.get("game_over", False)
+        ) or bool(ui_info.get("run_summary", False)):
+            key = self._auto_death_restart_key
+            reason = "death_restart"
+        elif bool(ui_info.get("blocking_menu", False)) or bool(
+            ui_info.get("main_menu", False)
+        ) or bool(ui_info.get("stage_select", False)):
+            key = self._auto_menu_confirm_key
+            reason = "menu_confirm"
+        elif bool(ui_info.get("pause_menu", False)):
+            key = self._auto_pause_back_key
+            reason = "pause_back"
+
+        if key is None:
+            return info
+
+        self._controller.press_key(key, duration=0.05)
+        self._last_auto_ui_step = self._current_step
+        info.update({"triggered": True, "key": key, "reason": reason})
+        return info
+
+    def _maybe_auto_confirm_choice(self, ui_info: dict) -> dict:
+        """Confirm perk/skill choice screens when recognized by UI perception."""
         info = {"triggered": False, "key": None, "pending": self._pending_auto_confirms}
         if not self._auto_confirm_level_up:
             return info
 
-        choice_detected = reward_info.get("level_up", False) or reward_info.get(
+        choice_detected = ui_info.get("level_up", False) or ui_info.get(
             "level_up_screen", False
-        )
+        ) or ui_info.get("perk_choice", False)
         if choice_detected and self._pending_auto_confirms <= 0:
             self._pending_auto_confirms = max(1, self._auto_confirm_repeats)
 
@@ -315,17 +389,20 @@ class MegaBonkEnv(gym.Env):
         )
         return info
 
-    def _maybe_auto_interact(self, action_info: dict) -> dict:
-        """Periodically press interact for button totems and nearby pickups."""
+    def _maybe_auto_interact(self, action_info: dict, ui_info: Optional[dict] = None) -> dict:
+        """Press interact for recognized prompts, plus periodic safety taps."""
         info = {"triggered": False, "key": None}
         if not self._auto_interact_enabled or action_info.get("interact", False):
             return info
-        if self._auto_interact_every_steps <= 0:
-            return info
 
-        steps_since_last = self._current_step - self._last_auto_interact_step
-        if steps_since_last < self._auto_interact_every_steps:
-            return info
+        ui_info = ui_info or {}
+        prompt_detected = bool(ui_info.get("interactable_prompt", False))
+        if not prompt_detected:
+            if self._auto_interact_every_steps <= 0:
+                return info
+            steps_since_last = self._current_step - self._last_auto_interact_step
+            if steps_since_last < self._auto_interact_every_steps:
+                return info
 
         self._controller.press_key(
             self._auto_interact_key,

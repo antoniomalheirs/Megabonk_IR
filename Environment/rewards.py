@@ -321,6 +321,32 @@ class RewardCalculator:
         self._stagnation_count = 0
         self._steps = 0
 
+    def peek(self, frame: np.ndarray) -> dict:
+        """Read UI-critical state without mutating reward history.
+
+        This lightweight pre-step pass intentionally avoids OCR and reward
+        shaping so it can gate policy inputs while menus/choice screens are
+        visible without changing episode rewards or previous HUD values.
+        """
+        is_dead = self._template_detector.detect(
+            frame, "game_over", self.config.template_match_threshold
+        )
+        level_up_screen = self._template_detector.detect(
+            frame, "level_up", self.config.template_match_threshold
+        )
+
+        hp_crop = self._crop_region(frame, self.config.hp_region)
+        xp_crop = self._crop_region(frame, self.config.xp_region)
+        return {
+            "step": self._steps,
+            "dead": is_dead,
+            "level_up": level_up_screen,
+            "level_up_screen": level_up_screen,
+            "hp": self._bar_reader.read_hp_bar(hp_crop),
+            "xp": self._bar_reader.read_xp_bar(xp_crop),
+            "score": self._prev_score,
+        }
+
     def calculate(self, frame: np.ndarray) -> tuple[float, dict]:
         """
         Calculate reward from the current frame.

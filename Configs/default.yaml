@@ -167,6 +167,16 @@ environment:
   auto_blocking_menu_keys: ["enter"]
   auto_loading_screen_keys: []
   auto_ui_cooldown_steps: 20
+  # When a blocking menu, pause menu, death/results screen or upgrade choice is
+  # visible, stop sending policy movement/mouse actions and let UI automation
+  # press one deliberate key at a time. This prevents stuck WASD/mouse inputs
+  # while the game expects menu navigation.
+  pause_agent_on_blocking_ui: true
+  # Release held gameplay keys before menu/choice inputs.
+  ui_release_before_input: true
+  # Short real-time pause after menu/choice input so the game UI can animate,
+  # load, or accept focus before the next decision.
+  ui_action_pause_seconds: 0.15
 
 # --- PPO Hyperparameters ---
 ppo:
